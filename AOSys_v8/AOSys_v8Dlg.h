@@ -19,6 +19,7 @@
 
 // 添加选项卡类的头文件
 #include "SubApertureDlg.h"
+#include "ReconWavefrontDlg.h"
 #include "DeformMirrorDlg.h"
 #include "DeviationXDlg.h"
 #include "MiscSettingDlg.h"
@@ -96,8 +97,7 @@ UINT ThreadFunc_WFS_Measurement_REC(LPVOID pParam);
 // 声明波前控制阶段的线程函数
 UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam);
 
-// 预处理的线程函数
-UINT ThreadFunc_PreCalculation(LPVOID pParam);
+
 
 //--------------------------------------------------------------------------------
 
@@ -170,25 +170,6 @@ static inline void IntToString(std::string& out, const int value)
 }
 
 
-// 用于等待一定时间的函数，输入时间单位ms
-int wait4U(int time_milliseconds);
-
-// 用于驱动变形镜的函数，单位是nm，按照引用传形参，数组大小固定
-int DriveDeformMirror_nm(double (&executeStroke)[140]);
-
-// 用于驱动变形镜的函数，单位是V，这个函数目前还没有写
-// int DriveDeformMirror_V(double(&executeStroke)[140]);
-
-// 用于探测波前的脱靶量(仅适用于普通模式)
-int Detect_Wavefront2Deviation_Normal();
-
-// 用于直接处理脱靶量，保证处理后的数据没有无效值，适用于普通模式与高速模式，输入可能包含无效值的脱靶量，输出全部有效的脱靶量
-int MeanInterpolation_KillNAN();
-
-// 计算并返回评价函数，评价函数的计算方式是：x与y方向的脱靶量平方相加，最后开根号得到
-double CalcMeritFunc_SquareDevi();
-
-
 
 #pragma endregion 全局函数声明
 
@@ -206,12 +187,12 @@ public:
 	CWinThread* pThread_DET;  // 用于波前探测的线程
 	CWinThread* pThread_REC;  // 用于波前重建的线程
 	CWinThread* pThread_LOOP; // 用于闭环的线程
-	CWinThread* pThread_PreCalc; // 用于闭环的线程
 
 
 	// TAB控件上每个对话框的指针，每个对话框都有一个指针
 	// 子对话框的类被定义为主对话框类的成员变量
 	CSubApertureDlg*  ptr_SubApertureImageDlg;
+	CReconWavefrontDlg* ptr_ReconWavefrontDlg;
 	CDeformMirrorDlg* ptr_DeformMirrorDlg;
 	CDeviationXDlg* ptr_DeviationXDlg;
 	CMiscSettingDlg* ptr_MiscSettingDlg;
@@ -315,10 +296,7 @@ public:
 	CString m_Edit_ShowMerit;
 	CString m_Edit_Show_NewTimer;
 	afx_msg void OnBnClickedButtonPreCalc();
-	int Show_MeritPVRMS(double merit, double PV, double RMS);
-	int Timer_SetTimer(double settimer);
-	int rotateMatrix_12vector(int angle, std::vector<std::vector<double>>& origin, std::vector<std::vector<double>>& modified);
-	int Show_PVRMS(double PV, double RMS);
+	afx_msg void OnBnClickedButtonPreCalcLoad();
 };
 
 

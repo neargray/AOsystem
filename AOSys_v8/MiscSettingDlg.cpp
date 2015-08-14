@@ -29,12 +29,14 @@ void CMiscSettingDlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Control(pDX, IDC_CHECK_SUBDLG_TIMESETTER, m_Check_SubDlg_TimeSetter);
 	DDX_Control(pDX, IDC_CHECK_REMEMBER_DEVIATION, m_Check_SubDlg_RemeberDevi);
 	DDX_Text(pDX, IDC_STATIC_REMEMBER_STATE, m_Static_RememberState);
-	DDX_Control(pDX, IDC_CHECK_REMEMBER_MERIT, m_Check_Remember_Merit);
 }
 
 
 BEGIN_MESSAGE_MAP(CMiscSettingDlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON_REMEMBER_DEVI, &CMiscSettingDlg::OnBnClickedButtonRememberDevi)
+	ON_BN_CLICKED(IDC_BUTTON_DLG_DRAW, &CMiscSettingDlg::OnBnClickedButtonDlgDraw)
+	ON_BN_CLICKED(IDC_BUTTON_DLG_CLEAN, &CMiscSettingDlg::OnBnClickedButtonDlgClean)
+	//ON_WM_PAINT()
 END_MESSAGE_MAP()
 
 
@@ -91,6 +93,104 @@ void CMiscSettingDlg::OnBnClickedButtonRememberDevi()
 }
 
 
+void CMiscSettingDlg::OnBnClickedButtonDlgDraw()
+{
+	// TODO: Add your control notification handler code here
+
+	//display = 1;
+	//RedrawWindow(0, 0, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE);
+
+}
 
 
+void CMiscSettingDlg::OnBnClickedButtonDlgClean()
+{
+	// TODO: Add your control notification handler code here
 
+	display = 2;
+	RedrawWindow(0, 0, RDW_INVALIDATE | RDW_UPDATENOW | RDW_ERASE);
+
+}
+
+
+//void CMiscSettingDlg::OnPaint()
+//{
+//
+//
+//	if (IsIconic())
+//	{
+//		CPaintDC dc(this); // device context for painting
+//
+//		SendMessage(WM_ICONERASEBKGND, reinterpret_cast<WPARAM>(dc.GetSafeHdc()), 0);
+//
+//		// Center icon in client rectangle
+//		int cxIcon = GetSystemMetrics(SM_CXICON);
+//		int cyIcon = GetSystemMetrics(SM_CYICON);
+//		CRect rect;
+//		GetClientRect(&rect);
+//		int x = (rect.Width() - cxIcon + 1) / 2;
+//		int y = (rect.Height() - cyIcon + 1) / 2;
+//
+//		// Draw the icon
+//		dc.DrawIcon(x, y, m_hIcon);
+//	}
+//	else
+//	{
+//
+//		if (display == 1)
+//		{
+//			CPaintDC dc(this);
+//
+//			CPen pen(PS_SOLID, 1, RGB(rand() % 255, rand() % 255, rand() % 255));
+//			dc.SelectObject(pen);
+//
+//			CRect rect;
+//			GetClientRect(&rect);
+//			int nWidth = 0.75*rect.Width();
+//			int nHeight = 0.75*rect.Height();
+//
+//			const unsigned int SEGMENT = 100;
+//			CPoint pt[SEGMENT];
+//			for (int i = 0; i < SEGMENT; ++i)
+//			{
+//				pt[i].x = i*nWidth / SEGMENT;
+//				//pt[i].y = (int)((nHeight / 2)*(1 - sin(2 * 3.1415926*i / SEGMENT)));
+//				pt[i].y = rand() % 100 + 140;
+//
+//			}
+//
+//			dc.Polyline(pt, SEGMENT);
+//
+//			DeleteObject(dc);
+//
+//		}
+//		if (display == 2)
+//		{
+//			CPaintDC dc(this);
+//
+//			CPen pen(PS_SOLID, 1, RGB(230, 230, 230));  // (230, 230, 230)这个RGB值比较接近界面的灰色了
+//			dc.SelectObject(pen);
+//
+//			CRect rect;
+//			GetClientRect(&rect);
+//			int nWidth = 0.75*rect.Width();
+//			int nHeight = 0.75*rect.Height();
+//
+//			const unsigned int SEGMENT = 100;
+//			CPoint pt[SEGMENT];
+//			for (int i = 0; i < SEGMENT; ++i)
+//			{
+//				pt[i].x = i*nWidth / SEGMENT;
+//				pt[i].y = (int)((nHeight / 2)*(1 - sin(2 * 3.1415926*i / SEGMENT))) + 30;
+//			}
+//
+//			dc.Polyline(pt, SEGMENT);
+//
+//			DeleteObject(dc);
+//
+//
+//		}
+//	}
+//
+//
+//}

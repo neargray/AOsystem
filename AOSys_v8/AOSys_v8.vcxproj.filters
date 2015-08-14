@@ -54,6 +54,9 @@
     <ClInclude Include="SubApertureDlg.h">
       <Filter>头文件</Filter>
     </ClInclude>
+    <ClInclude Include="ReconWavefrontDlg.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
     <ClInclude Include="DeformMirrorDlg.h">
       <Filter>头文件</Filter>
     </ClInclude>
@@ -78,6 +81,9 @@
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="SubApertureDlg.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="ReconWavefrontDlg.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
     <ClCompile Include="DeformMirrorDlg.cpp">

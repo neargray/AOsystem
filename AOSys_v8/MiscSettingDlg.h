@@ -31,5 +31,12 @@ public:
 	CString m_Static_RememberState;
 	afx_msg void OnBnClickedButtonRememberDevi();
 
-	CButton m_Check_Remember_Merit;
+private:
+	int display = 0;
+	HICON m_hIcon;
+
+public:
+	afx_msg void OnBnClickedButtonDlgDraw();
+	afx_msg void OnBnClickedButtonDlgClean();
+	//afx_msg void OnPaint();
 };

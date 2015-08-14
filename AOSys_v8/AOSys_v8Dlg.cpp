@@ -159,6 +159,7 @@ void CAOSys_v8Dlg::DoDataExchange(CDataExchange* pDX)
 	DDX_Text(pDX, IDC_EDIT_SHOW_BL, m_Edit_Show_BL);
 	DDX_Text(pDX, IDC_EDIT_SHOW_CANCELTILT, m_Edit_Show_CancelTilt);
 	DDX_Text(pDX, IDC_EDIT_STA_CANCELTILT, m_Edit_Sta_CancelTilt);
+	DDX_Text(pDX, IDC_EDIT_STA_GRIDTYPE, m_Edit_Sta_GridType);
 	DDX_Text(pDX, IDC_EDIT_STA_TIME, m_Edit_Sta_Time);
 	DDX_Text(pDX, IDC_EDIT_STA_WATCH, m_Edit_Sta_Watch);
 	DDX_Control(pDX, IDC_TAB_DISPLAY, m_tabDisplay);
@@ -201,7 +202,7 @@ BEGIN_MESSAGE_MAP(CAOSys_v8Dlg, CDialogEx)
 	ON_BN_CLICKED(IDC_BUTTON_GEARUP, &CAOSys_v8Dlg::OnBnClickedButtonGearup)
 	ON_CBN_SELCHANGE(IDC_COMBO_CHOOSEALGO, &CAOSys_v8Dlg::OnSelchangeComboChoosealgo)
 	ON_BN_CLICKED(IDC_BUTTON_PRE_CALC, &CAOSys_v8Dlg::OnBnClickedButtonPreCalc)
-
+	ON_BN_CLICKED(IDC_BUTTON_PRE_CALC_LOAD, &CAOSys_v8Dlg::OnBnClickedButtonPreCalcLoad)
 END_MESSAGE_MAP()
 
 
@@ -243,6 +244,7 @@ BOOL CAOSys_v8Dlg::OnInitDialog()
 
 	// 为TAB控件添加标签
 	m_tabDisplay.InsertItem(0, _T("子孔径实时图像"));
+	m_tabDisplay.InsertItem(1, _T("波前实时重建图像"));
 	m_tabDisplay.InsertItem(2, _T("变形镜控制矩阵"));
 	m_tabDisplay.InsertItem(3, _T("脱靶量"));
 	m_tabDisplay.InsertItem(4, _T("其他设置"));
@@ -251,6 +253,7 @@ BOOL CAOSys_v8Dlg::OnInitDialog()
 
 	// 给每个对话框初始化指针，这个指针如何释放？这是一个全局的指针吧？
 	ptr_SubApertureImageDlg = new CSubApertureDlg();
+	ptr_ReconWavefrontDlg = new CReconWavefrontDlg();
 	ptr_DeformMirrorDlg = new CDeformMirrorDlg();
 	ptr_DeviationXDlg = new CDeviationXDlg();
 	ptr_MiscSettingDlg = new CMiscSettingDlg();
@@ -259,6 +262,7 @@ BOOL CAOSys_v8Dlg::OnInitDialog()
 
 	// 在响应的TAB控件标签页上创建对话框
 	ptr_SubApertureImageDlg->Create(IDD_DIALOG_SUBAPERTURE, &m_tabDisplay);
+	ptr_ReconWavefrontDlg->Create(IDD_DIALOG_RECONWAVEFRONT, &m_tabDisplay);
 	ptr_DeformMirrorDlg->Create(IDD_DIALOG_DMMATRIX, &m_tabDisplay);
 	ptr_DeviationXDlg->Create(IDD_DIALOG_DEVIATION_X, &m_tabDisplay);
 	ptr_MiscSettingDlg->Create(IDD_DIALOG_MISCSETTING, &m_tabDisplay);
@@ -273,9 +277,15 @@ BOOL CAOSys_v8Dlg::OnInitDialog()
 	tabRect.bottom -= 0;
 
 
+	// 根据调整好的tabRect放置m_SubApertureDlg子对话框，并设置为显示   
 	ptr_SubApertureImageDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_SHOWWINDOW);
+	// 根据调整好的tabRect放置m_ReconWavefontDlg子对话框，并设置为隐藏   
+	ptr_ReconWavefrontDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+	// 根据调整好的tabRect放置m_DeformMirrorDlg子对话框，并设置为隐藏 
 	ptr_DeformMirrorDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+	// 同理
 	ptr_DeviationXDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+	// 同理
 	ptr_MiscSettingDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
 
 
@@ -353,13 +363,14 @@ BOOL CAOSys_v8Dlg::OnInitDialog()
 	m_Combo_ChooseAlgo.AddString(L"PID算法");
 	m_Combo_ChooseAlgo.AddString(L"梯度算法");
 	m_Combo_ChooseAlgo.AddString(L"直接斜率法");
-	m_Combo_ChooseAlgo.SetCurSel(2);  // 默认算法
+	m_Combo_ChooseAlgo.SetCurSel(2);  // 默认算法选择第一项
 
 
 
 	// 与警报相关的控件初始化
 	str = "没有警报";
 	SetDlgItemText(IDC_STATIC_SHOW_ERROR, str);
+
 
 
 
@@ -432,7 +443,7 @@ instr_t				instr;
 instr_setup_t		instr_setup;
 spotinfo_t			spotinfo;
 AOSystemData*		aoSystemData;
-AOSystemData		aoSystemData_LOCAL;		// [no use]
+AOSystemData		aoSystemData_LOCAL;
 
 
 //     WFS_32
@@ -442,7 +453,10 @@ int               selection;
 double            expos_act, master_gain_act;
 ViInt32		      blackLevelOffsetAct;  // 初始值设置为50
 ViInt32			  NoiseCutAct;
-
+ViReal64          beam_centroid_x = 0;
+ViReal64		  beam_centroid_y = 0;
+double            beam_diameter_x = 0;
+double			  beam_diameter_y = 0;
 
 // 质心位置
 float             centroid_x[40][50];
@@ -453,22 +467,27 @@ float             reference_x[40][50];
 float             reference_y[40][50];
 
 
-// 全局变量
-// 脱靶量的位置，全局函数MeanInterpolation_KillNAN需要使用，PID算法需要使用
+// 脱靶量的位置
 float             deviation_x[40][50];
 float             deviation_y[40][50];
-
-// 全局变量，用于extern
 float			  rememberDeviationX[40][50][100]; // 用于记录每个时刻脱靶量的值
 float			  rememberDeviationY[40][50][100]; // 用于记录每个时刻脱靶量的值
+
 
 
 float             wavefront[40][50];
 float             Wavefront_Copy[29][29];
 
+float             zernike_um[MAX_ZERNIKE_MODES + 1];    // 索引号从1到MAX_ZERNIKE_MODES，这个变量有对应的局部变量，vector版本vector_zernike_um
+float             zernike_orders_rms_um[MAX_ZERNIKE_ORDERS + 1]; // index runs from 1 - MAX_ZERNIKE_MODES
+double            roc_mm;
 
+int               zernike_order;
+
+double            wavefront_min, wavefront_max, wavefront_diff, wavefront_mean, wavefront_rms, wavefront_weighted_rms;
 ViChar            resourceName[256];
-//FILE              *fp;
+FILE              *fp;
+//int               key;
 
 
 int iDMVoltage[144];
@@ -507,12 +526,15 @@ ViPReal64*		fitErrStdev;
 
 float			ZeroBias_float = 0;
 float			UnitFactor = 0;
+int				Mapping = 0;
 
 int				gridIndex = 0;  // 0是12x12的网格，1是29x29的网格
 
 
 
-////////////////////////////// PID算法的全局变量  //////////////////////////////////
+#pragma region 波前计算交互数据
+
+
 // vector版本
 std::vector<std::vector<double>> pupil;
 
@@ -533,9 +555,10 @@ std::vector<std::vector<double>> zernikeMatrix_13;
 std::vector<std::vector<double>> zernikeMatrix_14;
 std::vector<std::vector<double>> zernikeMatrix_15;
 
-
-// zernike拟合的方法控制变形镜
-std::vector<std::vector<double>> zernikeMatrix_recon;   // 只能用作全局变量，因为子类extern，初始化放置于BOOL CAOSys_v8Dlg::OnInitDialog()函数中
+// zernike拟合后的矩阵，即拟合波前，这个矩阵在12x12网格下要变为一维数据并去掉相应元素后发给DM
+std::vector<std::vector<double>> zernikeMatrix_recon;
+std::vector<std::vector<double>> zernikeMatrix_recon_rotate;
+std::vector<double> zernikeMatrix_recon_ParaCal(144);   //求均值和RMS值用的一维形式
 
 
 
@@ -563,15 +586,27 @@ double zernikeMatrix_recon_portal[12][12];
 
 
 
+// 最终发给变形镜用于闭环的变量
+double zernikeMatrix_recon_array[140];
+
+
+
+
+#pragma endregion 波前计算交互数据
+
+
+
 
 // 高速模式下定标位置的坐标位置
 // 数组形式
 float			XScale_array[50];
 float			YScale_array[40];
 
+// 容器形式
 std::vector<float> XScale_vector(50);
 std::vector<float> YScale_vector(40);
 
+// 将Matlab计算好的CppData与picked读入
 std::vector<std::vector<double>>	lsqA;
 std::vector<std::vector<double>>	eff_picked;
 
@@ -584,45 +619,53 @@ ViPInt32		col_image;
 IplImage*		m_img;  // 读取图片
 BOOL			CMOSImageFlag = TRUE;
 
-// PID参数，以全局变量的形式，在多个事件中有用到
+// PID参数，以全局变量的形式，在线程之间交互
 double pid_p, pid_i, pid_d;
-double DM_PID_P[144];  
-double DM_PID_I[144]; 
-double DM_PID_D[144];
+double DM_PID_P[140];
+double DM_PID_I[140];
+double DM_PID_D[140];
 
 // 相对坐标偏移
-double coordMoveX;
-double coordMoveY;
+double coordMoveX = 0;
+double coordMoveY = 0;
 
 // 子对话框的全局变量
-double timerSetterInterval;
-
-int angleRotate;
-
-int chooseAlgoIndex;
+double timerSetterInterval = 0;
 
 
+int angleRotate = 0;
+
+int chooseAlgoIndex = 2;
+
+////////////////////////////// 梯度函数的全局变量  //////////////////////////////////
+
+double randomMatrix[140];			// 生成的随机矩阵
+std::vector<std::vector<double>> zernikeMatrix_recon_ADD; // 加操作的执行量
+std::vector<std::vector<double>> zernikeMatrix_recon_MINUS; // 减操作的执行量
+
+// 默认操作发给变形镜
+double zernikeMatrix_recon_array_DEFAULT[140];
+// 加操作中最终发给变形镜用于闭环的变量，对应zernikeMatrix_recon_array[140]
+double zernikeMatrix_recon_array_ADD[140];
+// 减操作中最终发给变形镜用于闭环的变量，对应zernikeMatrix_recon_array[140]
+double zernikeMatrix_recon_array_MINUS[140];
+
+// 用于存储加操作的波前统计参数
+double     wavefront_min_add, wavefront_max_add, wavefront_diff_add, wavefront_mean_add, wavefront_rms_add, wavefront_weighted_rms_add;
+// 用于存储减操作的波前统计参数
+double     wavefront_min_minus, wavefront_max_minus, wavefront_diff_minus, wavefront_mean_minus, wavefront_rms_minus, wavefront_weighted_rms_minus;
 
 
-////////////////////////////// 梯度算法的全局变量  //////////////////////////////////
 
 
-
-
-
-////////////////////////////// 直接斜率法的全局变量  //////////////////////////////////
-double bias_initial = 100;   // 冲击响应函数的偏置量，单位nm
-double impulse_stroke = 2600;  // 冲击响应函数的冲击量，单位nm
-
-
-
-////////////////////////////// 与异常相关的全局变量  //////////////////////////////////
 // 与报警相关的变量，如果有错误就在IDC_STATIC_SHOW_ERROR控件上显示出来
+BOOL FLAG_NAN = 0;  // 0表示没有NAN数据，1表示有NAN数据
 CString str_showerror;    // 用于状态栏字符的显示
+double NAN_deviationXY[100][29][29];
 
 
-
-
+double bias_initial = 1200;   // 冲击响应函数的偏置量，单位nm
+double impulse_stroke = 1300;  // 冲击响应函数的冲击量，单位nm
 
 
 #pragma endregion 全局变量
@@ -662,8 +705,8 @@ void CAOSys_v8Dlg::OnClickedButtonDmIni()
 	aoSystemData->Volt.DMVoltageScale = 54.6;
 
 	// 设置电压转换到行程的系数
-	coeff[0] = 0.0413;
-	coeff[1] = 3.97;
+	coeff[0] = 0.0227;
+	coeff[1] = 12.082;
 	coeff[2] = 0;
 
 
@@ -737,6 +780,50 @@ void CAOSys_v8Dlg::OnClickedButtonRecReconstruction()
 void CAOSys_v8Dlg::OnClickedButtonRecConDm()
 {
 
+#pragma region 将数据发送给DM
+	// 这里也许需要一个矩阵旋转的过程
+
+
+
+
+	// 二维vector转为一维vector，删掉4个角上的元素，转为一维数组
+	std::vector<double> zernikeMatrix_recon_1d(144);		// 声明并初始化一个一维vector
+	for (int i = 0; i < 12; ++i)
+		for (int j = 0; j < 12; ++j)
+			zernikeMatrix_recon_1d[i * 12 + j] = zernikeMatrix_recon[i][j];
+	// 要删除4个元素
+	zernikeMatrix_recon_1d.erase(zernikeMatrix_recon_1d.begin());
+	zernikeMatrix_recon_1d.erase(zernikeMatrix_recon_1d.begin() + 10);
+	zernikeMatrix_recon_1d.erase(zernikeMatrix_recon_1d.begin() + 130);
+	zernikeMatrix_recon_1d.erase(zernikeMatrix_recon_1d.begin() + 140);
+	//将140个元素的一维vector转为数组, 删除元素之后的一维vector用于输出到文件
+	double zernikeMatrix_recon_array[140] = { 0 };
+	for (int i = 0; i < 140; ++i)
+	{
+		// 正常情况下的计算结果发送给变形镜
+		zernikeMatrix_recon_array[i] = zernikeMatrix_recon_array[i] + zernikeMatrix_recon_1d[i] * 500 * 0.2;
+		// 测试状态下，将0值发送给变形镜
+		//zernikeMatrix_recon_array[i] = 0;
+	}
+
+
+	//## 这里要有一个转换，将vector转换为数组
+	P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
+	aoSystemData->dDMDesired = zernikeMatrix_recon_array;  // dDMDesired的单位是nm
+	int status = P_DM_SetSpatialFrame();
+
+	// 将二维和一维的矩阵写入文件
+	write_2d_File("D:\\externLib\\AOS\\Output\\Recon_zernikeMatrix2D.txt", zernikeMatrix_recon);
+	write_1d_File("D:\\externLib\\AOS\\Output\\Recon_zernikeMatrix1D.txt", zernikeMatrix_recon_1d);
+
+	//## 用完zernikeMatrix_recon，千万要pop，否则数据会一直堆积
+	release_2dVector(zernikeMatrix_recon, 12);
+	release_1dVector(zernikeMatrix_recon_1d, 140);
+
+#pragma endregion 将数据发送给DM
+
+
+
 
 }// 波前重建模式下控制变形镜
 
@@ -744,6 +831,65 @@ void CAOSys_v8Dlg::OnClickedButtonRecConDm()
 
 void CAOSys_v8Dlg::OnClickedButtonDmZero()
 {
+
+	// 初始化局部变量
+	std::vector<double> test_zernikeMatrix_recon_1d(144);
+	double test_zernikeMatrix_recon_array[140];
+	double generateWavefront[12][12];
+
+
+	// 产生一个倾斜的基底
+	zernike(1, -1, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_02, pupil, coordMoveX, coordMoveY);
+
+	for (int row = 0; row < 12; ++row)
+	{
+		for (int col = 0; col < 12; ++col)
+		{
+			generateWavefront[row][col] = zernikeMatrix_02[row][col];
+		}
+	}
+
+
+	// 二维数据转为一维数据
+	for (int i = 0; i < 12; ++i)
+		for (int j = 0; j < 12; ++j)
+			test_zernikeMatrix_recon_1d[i * 12 + j] = generateWavefront[i][j];
+
+	// 要删除4个元素
+	test_zernikeMatrix_recon_1d.erase(test_zernikeMatrix_recon_1d.begin());
+	test_zernikeMatrix_recon_1d.erase(test_zernikeMatrix_recon_1d.begin() + 10);
+	test_zernikeMatrix_recon_1d.erase(test_zernikeMatrix_recon_1d.begin() + 130);
+	test_zernikeMatrix_recon_1d.erase(test_zernikeMatrix_recon_1d.begin() + 140);
+
+	//将140个元素的一维vector转为数组, 删除元素之后的一维vector用于输出到文件
+	for (int i = 0; i < 140; ++i)
+	{
+
+		// P环节
+		DM_PID_P[i] = DM_PID_P[i] + test_zernikeMatrix_recon_1d[i] * 500 * pid_p;
+
+		test_zernikeMatrix_recon_array[i] = 1200 + DM_PID_P[i];  // P控制
+
+	}
+
+
+
+
+	//## 这里要有一个转换，将vector转换为数组
+	P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
+	aoSystemData->dDMDesired = test_zernikeMatrix_recon_array;
+	int status = P_DM_SetSpatialFrame();
+
+
+	// 将内存中的值刷入EDIT控件显示
+	float temp = 0;
+	for (int k_index = 0; k_index < 144; ++k_index)
+	{
+		temp = generateWavefront[k_index / 12][k_index % 12];
+		(ptr_DeformMirrorDlg->m_Edit_DM[k_index]).Format(_T("%lf"), temp);
+		SetDlgItemTextW(IDC_EDIT_DM_M001 + k_index, ptr_DeformMirrorDlg->m_Edit_DM[k_index]);
+
+	}
 
 
 }
@@ -754,13 +900,41 @@ void CAOSys_v8Dlg::OnClickedButtonDmZero()
 // 选择合适的网格，WFS探测到的波前减去Zernike拟合的波前
 void CAOSys_v8Dlg::OnClickedButtonRecZerfiterr()
 {
+	// 这里拟合误差就是在29x29网格的情况下，将wavefront的测量波前或者Zernike重建波前与我的Zernike重建波前进行做差的过程
+	// 这个过程需要我的Zernike拟合波前矩阵进行一定的变换，如转置，旋转等操作
 
+	// 为了满足不同分辨率要求wavefront的尺寸为MAX_SPOTS_Y x MAX_SPOTS_X
+	// 为了计算拟合误差，要调整到29 x 29，所以定义了Wavefront_Copy矩阵
+	for (int i = 0; i < 29; ++i)
+	{
+		for (int j = 0; j < 29; ++j)
+		{
+			Wavefront_Copy[i][j] = wavefront[i][j];
+		}
+	}
+
+
+
+	// 矩阵减法
+	for (int i = 0; i < 29; ++i)
+		for (int j = 0; j < 29; ++j)
+		{
+			zerPolyError29[i][j] = Wavefront_Copy[i][j] - zerWave_Matrix29[i][j];
+		}
+
+	WFS_WriteWavefrontZernikeError();
+
+	// 将Zernike拟合误差矩阵写入文件
 }
 
 // 波前重建模式下  写入文本事件
 void CAOSys_v8Dlg::OnClickedButtonRecWrite()
 {
+	// 将 波前重建模式下 波前重建事件 中全局变量zernikeMatrix_recon的填充值写入文档
+	write_2d_File("D:\\externLib\\AOS\\Output\\Recon_zernikeMatrix2D.txt", zernikeMatrix_recon);
 
+
+	GetDlgItem(IDC_EDIT_STA_WRITE)->SetWindowText(_T("写入成功"));
 }  // 波前重建模式下  写入文本事件
 
 
@@ -772,6 +946,35 @@ void CAOSys_v8Dlg::OnClickedButtonRecWrite()
 void CAOSys_v8Dlg::OnClickedButtonConCloseloop()
 {
 
+	// 如果是PID算法，那么就计算基底
+	if (chooseAlgoIndex == 0)
+	{
+
+#pragma region 产生基底
+
+
+		zernike(0, 0, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_01, pupil, coordMoveX, coordMoveY);
+		zernike(1, -1, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_02, pupil, coordMoveX, coordMoveY);
+		zernike(1, 1, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_03, pupil, coordMoveX, coordMoveY);
+		zernike(2, -2, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_04, pupil, coordMoveX, coordMoveY);
+		zernike(2, 0, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_05, pupil, coordMoveX, coordMoveY);
+		zernike(2, 2, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_06, pupil, coordMoveX, coordMoveY);
+		zernike(3, -3, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_07, pupil, coordMoveX, coordMoveY);
+		zernike(3, -1, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_08, pupil, coordMoveX, coordMoveY);
+		zernike(3, 1, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_09, pupil, coordMoveX, coordMoveY);
+		zernike(3, 3, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_10, pupil, coordMoveX, coordMoveY);
+		zernike(4, -4, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_11, pupil, coordMoveX, coordMoveY);
+		zernike(4, -2, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_12, pupil, coordMoveX, coordMoveY);
+		zernike(4, 0, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_13, pupil, coordMoveX, coordMoveY);
+		zernike(4, 2, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_14, pupil, coordMoveX, coordMoveY);
+		zernike(4, 4, 12, instr_setup.pupil_dia_x_mm, zernikeMatrix_15, pupil, coordMoveX, coordMoveY);
+
+
+
+#pragma endregion 产生基底
+
+	}
+
 
 	// 线程的参数设置
 	int       nPriority = THREAD_PRIORITY_HIGHEST;//默认为THREAD_PRIORITY_NORMAL
@@ -780,17 +983,10 @@ void CAOSys_v8Dlg::OnClickedButtonConCloseloop()
 
 	// 创建新线程
 	pThread_LOOP = new CWinThread();
-	pThread_LOOP->m_bAutoDelete = FALSE;  // 防止MFC删除CWinThread对象
+	pThread_LOOP->m_bAutoDelete = FALSE;
 	pThread_LOOP = AfxBeginThread(ThreadFunc_WFS_Measurement_CONLOOP, this,
 		nPriority, nStackSize, dwCreateFlags);  // 使用this指针将CAOSys_v7Dlg类传入线程函数
 	pThread_LOOP->ResumeThread();
-
-	DWORD dwExitCode;
-	::GetExitCodeThread(pThread_LOOP->m_hThread, &dwExitCode);
-	if (!(dwExitCode==STILL_ACTIVE))  // 如果线程不在活动，则删除
-	{
-		delete pThread_LOOP;
-	}
 
 
 }
@@ -807,8 +1003,108 @@ void CAOSys_v8Dlg::OnClickedButtonConWrite()
 // 用于寻找WFS与DM的中心位置
 void CAOSys_v8Dlg::OnClickedButtonDmCenterup()
 {
+	// 将DM_CenterUp.txt文件读入到内存
+	if ((fp = fopen("D:\\externLib\\AOS\\conDM\\DM_CenterUp.txt", "rt")) == NULL)
+	{
+		::MessageBox(NULL, _T("不能打开文件！"), _T("Status"), MB_OK);
+	}
+	for (int i = 0; i < 12; ++i)
+	{
+		for (int j = 0; j < 12; ++j)
+			fscanf(fp, "%f", &zerWave_Matrix[i][j]);
+		fscanf(fp, "\n");
+	}
+	fclose(fp);
+
+	// 把矩阵校验一下
+	DM_WriteCheckZernikeMatrix();
+
+#pragma region mapping   //这一部分的代码要修改，系统确定了，坐标关系也就确定了
+	Mapping = 0;
+	if (Mapping == 0)
+	{
+		// 左右翻转
+		for (int i = 0; i < 12; ++i)
+			for (int j = 0; j < 12; ++j)
+				zerWave_Matrix_Temp[i][11 - j] = zerWave_Matrix[i][j];
+		GetDlgItem(IDC_EDIT_STA_MAPTYPE)->SetWindowText(_T("左右翻转"));
+	}
+	else if (Mapping == 1)
+	{
+		// 上下翻转
+		for (int i = 0; i < 12; ++i)
+			for (int j = 0; j < 12; ++j)
+				zerWave_Matrix_Temp[11 - i][j] = zerWave_Matrix[i][j];
+		GetDlgItem(IDC_EDIT_STA_MAPTYPE)->SetWindowText(_T("上下翻转"));
+	}
+	else if (Mapping == 2)
+	{
+		// 转置
+		for (int i = 0; i < 12; ++i)
+			for (int j = 0; j < 12; ++j)
+				zerWave_Matrix_Temp[j][i] = zerWave_Matrix[i][j];
+		GetDlgItem(IDC_EDIT_STA_MAPTYPE)->SetWindowText(_T("转置"));
+	}
+	else if (Mapping == 3)
+	{
+		// 顺时针转动90度
+		for (int i = 0; i < 12; ++i)
+			for (int j = 0; j < 12; ++j)
+				zerWave_Matrix_Temp[j][11 - i] = zerWave_Matrix[i][j];
+		GetDlgItem(IDC_EDIT_STA_MAPTYPE)->SetWindowText(_T("顺时针转动90度"));
+	}
+	else if (Mapping == 4)
+	{
+		// 顺时针转动180度
+		for (int i = 0; i < 12; ++i)
+			for (int j = 0; j < 12; ++j)
+				zerWave_Matrix_Temp[11 - i][11 - j] = zerWave_Matrix[i][j];
+		GetDlgItem(IDC_EDIT_STA_MAPTYPE)->SetWindowText(_T("顺时针转动180度"));
+	}
+	else if (Mapping == 5)
+	{
+		// 顺时针转动270度, 这个结果看起来不错
+		for (int i = 0; i < 12; ++i)
+			for (int j = 0; j < 12; ++j)
+				zerWave_Matrix_Temp[11 - j][i] = zerWave_Matrix[i][j];
+		GetDlgItem(IDC_EDIT_STA_MAPTYPE)->SetWindowText(_T("顺时针转动270度"));
+	}
+	else
+	{
+		GetDlgItem(IDC_EDIT_STA_MAPTYPE)->SetWindowText(_T("非法映射"));
+	}
+#pragma endregion mapping
+
+	// 将转置后的矩阵写入文件
+	DM_WriteTransposeMatrix();
 
 
+	// 将二维矩阵zerWave_Matrix，根据手册中的DM Actuator Map转换为一维的数据，长度为140
+	// 得到可以写入DM的Stroke数组DM_Stroke_1D
+	// 输出信息：
+	//			DM_Stroke_1D[144]
+
+	for (int j = 1; j < 11; ++j)
+	{
+		DM_Stroke_1D[j] = zerWave_Matrix[0][j];
+	}
+	DMcount = 0;
+	for (int i = 1; i < 11; ++i)
+		for (int j = 0; j < 12; ++j)
+		{
+			DM_Stroke_1D[11 + DMcount] = zerWave_Matrix_Temp[i][j];
+			++DMcount;
+		}
+	for (int j = 1; j < 11; ++j)
+	{
+		DM_Stroke_1D[131 + j - 1] = zerWave_Matrix_Temp[11][j];  // 这个向量就是可以直接写入DM的一维驱动器行程的控制量
+	}
+
+	P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
+	aoSystemData->dDMDesired = DM_Stroke_1D;
+	int status = P_DM_SetSpatialFrame();
+
+	DM_Write1DMatrix();
 }
 
 
@@ -840,6 +1136,8 @@ void CAOSys_v8Dlg::OnTcnSelchangeTabDisplay(NMHDR *pNMHDR, LRESULT *pResult)
 	case 0:
 		// 根据调整好的tabRect放置m_SubApertureDlg子对话框，并设置为显示   
 		ptr_SubApertureImageDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_SHOWWINDOW);
+		// 根据调整好的tabRect放置m_ReconWavefontDlg子对话框，并设置为隐藏   
+		ptr_ReconWavefrontDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
 		// 根据调整好的tabRect放置m_DeformMirrorDlg子对话框，并设置为隐藏 
 		ptr_DeformMirrorDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
 		// 同理
@@ -852,8 +1150,10 @@ void CAOSys_v8Dlg::OnTcnSelchangeTabDisplay(NMHDR *pNMHDR, LRESULT *pResult)
 	case 1:
 		// 根据调整好的tabRect放置m_jzmDlg子对话框，并设置为隐藏   
 		ptr_SubApertureImageDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+		// 根据调整好的tabRect放置m_androidDlg子对话框，并设置为显示   
+		ptr_ReconWavefrontDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_SHOWWINDOW);
 		// 根据调整好的tabRect放置m_DeformMirrorDlg子对话框，并设置为隐藏 
-		ptr_DeformMirrorDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_SHOWWINDOW);
+		ptr_DeformMirrorDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
 		// 同理
 		ptr_DeviationXDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
 		// 同理
@@ -864,6 +1164,22 @@ void CAOSys_v8Dlg::OnTcnSelchangeTabDisplay(NMHDR *pNMHDR, LRESULT *pResult)
 	case 2:
 		// 根据调整好的tabRect放置m_jzmDlg子对话框，并设置为隐藏   
 		ptr_SubApertureImageDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+		// 根据调整好的tabRect放置m_androidDlg子对话框，并设置为隐藏   
+		ptr_ReconWavefrontDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+		// 根据调整好的tabRect放置m_DeformMirrorDlg子对话框，并设置为显示 
+		ptr_DeformMirrorDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_SHOWWINDOW);
+		// 同理
+		ptr_DeviationXDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+		// 同理
+		ptr_MiscSettingDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+
+		break;
+
+	case 3:
+		// 根据调整好的tabRect放置m_jzmDlg子对话框，并设置为隐藏   
+		ptr_SubApertureImageDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+		// 根据调整好的tabRect放置m_androidDlg子对话框，并设置为隐藏   
+		ptr_ReconWavefrontDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
 		// 根据调整好的tabRect放置m_DeformMirrorDlg子对话框，并设置为显示 
 		ptr_DeformMirrorDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
 		// 同理
@@ -873,9 +1189,11 @@ void CAOSys_v8Dlg::OnTcnSelchangeTabDisplay(NMHDR *pNMHDR, LRESULT *pResult)
 
 		break;
 
-	case 3:
+	case 4:
 		// 根据调整好的tabRect放置m_jzmDlg子对话框，并设置为隐藏   
 		ptr_SubApertureImageDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
+		// 根据调整好的tabRect放置m_androidDlg子对话框，并设置为隐藏   
+		ptr_ReconWavefrontDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
 		// 根据调整好的tabRect放置m_DeformMirrorDlg子对话框，并设置为显示 
 		ptr_DeformMirrorDlg->SetWindowPos(NULL, tabRect.left, tabRect.top, tabRect.Width(), tabRect.Height(), SWP_HIDEWINDOW);
 		// 同理
@@ -900,25 +1218,25 @@ void CAOSys_v8Dlg::OnBnClickedButtonReleaseMem()
 {
 	// TODO: Add your control notification handler code here
 
-	// 清理基底
+	// 弹出基底
 	if (zernikeMatrix_01.size() > 0)
 	{
-		// 如果小于capacity，则不reallocate
-		zernikeMatrix_01.clear();
-		zernikeMatrix_02.clear();
-		zernikeMatrix_03.clear();
-		zernikeMatrix_04.clear();
-		zernikeMatrix_05.clear();
-		zernikeMatrix_06.clear();
-		zernikeMatrix_07.clear();
-		zernikeMatrix_08.clear();
-		zernikeMatrix_09.clear();
-		zernikeMatrix_10.clear();
-		zernikeMatrix_11.clear();
-		zernikeMatrix_12.clear();
-		zernikeMatrix_13.clear();
-		zernikeMatrix_14.clear();
-		zernikeMatrix_15.clear();
+		release_2dVector(zernikeMatrix_01, 12);
+		release_2dVector(zernikeMatrix_02, 12);
+		release_2dVector(zernikeMatrix_03, 12);
+		release_2dVector(zernikeMatrix_04, 12);
+		release_2dVector(zernikeMatrix_05, 12);
+		release_2dVector(zernikeMatrix_06, 12);
+		release_2dVector(zernikeMatrix_07, 12);
+		release_2dVector(zernikeMatrix_08, 12);
+		release_2dVector(zernikeMatrix_09, 12);
+		release_2dVector(zernikeMatrix_10, 12);
+		release_2dVector(zernikeMatrix_11, 12);
+		release_2dVector(zernikeMatrix_12, 12);
+		release_2dVector(zernikeMatrix_13, 12);
+		release_2dVector(zernikeMatrix_14, 12);
+		release_2dVector(zernikeMatrix_15, 12);
+
 	}
 
 	// 弹出重新初始化PID参数
@@ -927,6 +1245,11 @@ void CAOSys_v8Dlg::OnBnClickedButtonReleaseMem()
 		pid_p = 0;
 		pid_i = 0;
 		pid_d = 0;
+	}
+
+	for (int i = 0; i < 140; ++i)  // 程序结束置零
+	{
+		zernikeMatrix_recon_array[i] = 0;
 	}
 
 
@@ -1071,6 +1394,11 @@ void CAOSys_v8Dlg::OnBnClickedButtonGearup()
 	SetDlgItemTextW(IDC_EDIT_SHOWPID_D, m_Edit_ShowPID_D);
 
 
+	for (int i = 0; i < 140; ++i)  // 程序结束置零
+	{
+		zernikeMatrix_recon_array[i] = 1200;
+	}
+
 
 	// 子对话框的设置
 	(ptr_MiscSettingDlg->GetDlgItem(IDC_EDIT_SUBDLG_TIMERSETTING))->GetWindowTextW(ptr_MiscSettingDlg->m_Edit_TimeSetter); // x方向坐标偏移
@@ -1079,6 +1407,9 @@ void CAOSys_v8Dlg::OnBnClickedButtonGearup()
 
 	GetDlgItem(IDC_EDIT_SETANGLE)->GetWindowText(m_Edit_SetAngle);
 	angleRotate = _wtoi(m_Edit_SetAngle);
+
+
+	// 将预处理的数据载入，即Matlab求逆数据
 
 
 
@@ -1099,29 +1430,146 @@ void CAOSys_v8Dlg::OnSelchangeComboChoosealgo()
 // 直接斜率法的预处理事件
 void CAOSys_v8Dlg::OnBnClickedButtonPreCalc()
 {
+	// 将140个DM驱动器单元依次发给变形镜，WFS获得响应的波前
+	double DM_PreCalc[140];  // 必须是double，否则aoSystemData->dDMDesired = DM_PreCalc;不好强转
+	float  deviation_x_PreCalc[40][50];  // x方向脱靶量，单位像素
+	float  deviation_y_PreCalc[40][50];  // y方向脱靶量，单位像素
+	std::vector<std::vector<double>> deviation_x_nm_PreCalc;  // x方向斜坡数据，单位nm
+	std::vector<std::vector<double>> deviation_y_nm_PreCalc;   // y方向斜坡数据，单位nm
 
-	// 线程的参数设置
-	int       nPriority = THREAD_PRIORITY_HIGHEST;//默认为THREAD_PRIORITY_NORMAL
-	UINT       nStackSize = 0;//与创建它的线程堆栈大小相同
-	DWORD       dwCreateFlags = CREATE_SUSPENDED;//CREATE_SUSPENDED 创建后挂起线程
+	// 初始化容器
+	init_2dVector(deviation_x_nm_PreCalc, 29, 29);
+	init_2dVector(deviation_y_nm_PreCalc, 29, 29);
 
-	// 创建新线程
-	pThread_PreCalc = new CWinThread();
-	pThread_PreCalc->m_bAutoDelete = FALSE;  // 防止MFC删除CWinThread对象
-	pThread_PreCalc = AfxBeginThread(ThreadFunc_PreCalculation, this,
-		nPriority, nStackSize, dwCreateFlags);  // 使用this指针将CAOSys_v7Dlg类传入线程函数
-	pThread_PreCalc->ResumeThread();
 
-	DWORD dwExitCode;
-	::GetExitCodeThread(pThread_PreCalc->m_hThread, &dwExitCode);
-	if (!(dwExitCode == STILL_ACTIVE))  // 如果线程不在活动，则删除
+	// 用于保存文件的std::string
+	// 尽量少用CString，而多用标准库中的std::string
+	std::string fileFullPath, filenamePrefix, finenameSuffix;
+	std::string indexCString, XdeviCString, YdeviCString;
+	std::string statusCString;
+
+	XdeviCString = "XDevi";
+	YdeviCString = "YDevi";
+	filenamePrefix = "D:\\externLib\\AOS\\Output\\PreCalc\\in\\";
+	finenameSuffix = ".txt";
+
+	// 用于在状态栏显示
+	CString indexCString_forreal;
+
+	// WFS像素大小4.65um，用于将单位从pixel转换为nm
+	float  unitCoeff = 1; 
+
+	for (int index = 0; index < 140; ++index)
 	{
-		delete pThread_PreCalc;
+		// 依次更改变形镜
+		for (int i = 0; i < 140; ++i)
+		{
+			DM_PreCalc[i] = bias_initial;
+		}
+		DM_PreCalc[index] = bias_initial + impulse_stroke;
+
+		// 驱动DM
+		P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
+		aoSystemData->dDMDesired = DM_PreCalc;
+		int status = P_DM_SetSpatialFrame();
+
+
+		//WFS探测到的波前分别保存至文件
+		// 普通模式下，获取子孔径阵列的图片
+		WFS_TakeSpotfieldImage(instr.handle);
+		// 根据图片计算质心位置
+		WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
+		// 计算脱靶量
+		WFS_CalcSpotToReferenceDeviations(instr.handle, instr_setup.cancel_tilt);
+		// 获得脱靶量，单位是像素
+		WFS_GetSpotDeviations(instr.handle, *deviation_x_PreCalc, *deviation_y_PreCalc);
+
+		// 更换数据类型
+		for (int row = 0; row < 29; ++row)
+		{
+			for (int col = 0; col < 29; ++col)
+			{
+				deviation_x_nm_PreCalc[row][col] = deviation_x_PreCalc[row][col] * unitCoeff;
+				deviation_y_nm_PreCalc[row][col] = deviation_y_PreCalc[row][col] * unitCoeff;
+			}
+		} 
+
+		// int类型转换为std::string类型
+		IntToString(indexCString, index);
+		
+
+
+#pragma region 等待时间
+
+		//新计时器开始
+		LARGE_INTEGER nStartCounter_dmwait;
+		LARGE_INTEGER nFrequency_dmwait;
+		double nTime_dmwait = 0; // 记录时间
+
+		::QueryPerformanceCounter(&nStartCounter_dmwait);
+		::QueryPerformanceFrequency(&nFrequency_dmwait);
+
+
+		do
+		{
+			LARGE_INTEGER nStopCounter_dmwait;
+			::QueryPerformanceCounter(&nStopCounter_dmwait);
+			nTime_dmwait = 1000 * ((double)nStopCounter_dmwait.QuadPart - (double)nStartCounter_dmwait.QuadPart) / (double)nFrequency_dmwait.QuadPart;    // 单位 ms
+		} while (nTime_dmwait < 300);
+
+
+#pragma endregion 等待时间
+
+
+
+
+		// 将x脱靶量写入文件
+		fileFullPath = filenamePrefix + XdeviCString + "_" + indexCString + finenameSuffix;
+		write_2d_File(fileFullPath, deviation_x_nm_PreCalc);
+		// 将y脱靶量写入文件
+		fileFullPath = filenamePrefix + YdeviCString + "_" + indexCString + finenameSuffix;
+		write_2d_File(fileFullPath, deviation_y_nm_PreCalc);
+
+
+		indexCString_forreal.Format(_T("%d"), index);
+		str_showerror = _T("预处理数据：  ") + indexCString_forreal;
+		SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
 	}
 
 
-}  // 事件结束
+	str_showerror = _T("预处理完毕");
+	SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
 
+	// 用完容器要释放
+	release_2dVector(deviation_x_nm_PreCalc, 29);
+	release_2dVector(deviation_y_nm_PreCalc, 29);
+
+}
+
+
+// 将Matlab的预处理数据载入，用于从脱靶量直接获得变形镜的执行量
+void CAOSys_v8Dlg::OnBnClickedButtonPreCalcLoad()
+{
+
+	// 将Matlab计算好的lsqA与eff_picked读入
+	// 例如，有效子孔径点个数为609,那么，lsqA的维数就应该是140*1218
+	lsqA = inputMatrix("D:\\externLib\\AOS\\Output\\PreCalc\\out\\lsqA.txt");
+	// 由于eff_picked要作为索引项，因此要将其转换为const int类型
+	// 例如，有效子孔径点个数为609，eff_picked当时初始化为841*2的矩阵，第610个为[0,0]，611起到后面都是未定义的值，在这之前是有效子孔径的位置信息
+	eff_picked = inputMatrix("D:\\externLib\\AOS\\Output\\PreCalc\\out\\eff_picked.txt");
+	// 注意eff_picked.size()表示行数，eff_picked[0].size()表示列数
+	// 例如eff_picked有609个子孔径点的索引号，那么就是609x2的一个矩阵，那么eff_picked.size()=609，eff_picked[0].size()=2
+
+	//// eff_picked做索引号举例如下：
+	//// MyMat_double类型的数据做索引
+	//lsqA[eff_picked[2][0]][eff_picked[2][1]];
+	//// vector<vector<double>>类型的数据做索引和上面是一样的
+	//zernikeMatrix_15[eff_picked[2][0]][eff_picked[2][1]];
+	//// float(POD)类型数据就要强转了！
+	//wavefront[(int)eff_picked[2][0]][(int)eff_picked[2][1]];
+
+}
 
 
 #pragma endregion 事件代码
@@ -1174,12 +1622,12 @@ int WFS_SelectInstrument(LPVOID pParam, int* selection, ViChar* resourceName)
 
 	char           instr_name[WFS_BUFFER_SIZE];
 	char           serNr[WFS_BUFFER_SIZE];
-	//char           strg[WFS_BUFFER_SIZE];
+	char           strg[WFS_BUFFER_SIZE];
 
 	//char*类型转换为多字节输出
-	//WCHAR W_instr_name[512];
-	//WCHAR W_serNr[512];
-	//WCHAR W_resourceName[512];
+	WCHAR W_instr_name[512];
+	WCHAR W_serNr[512];
+	WCHAR W_resourceName[512];
 
 	//## 感觉这个函数可以不需要，直接执行WFS_GetInstrumentListInfo看看行不行
 	// 找到空闲设备，返回WFS的设备数目instr_cnt
@@ -1335,7 +1783,191 @@ void WFS_Initialization_Sequence(LPVOID pParam)
 UINT ThreadFunc_WFS_Measurement_DET(LPVOID pParam)
 {
 
+#pragma region 线程中的局部变量
 
+	// 几个指向对话框的指针
+	CAOSys_v8Dlg* pW = (CAOSys_v8Dlg*)pParam;
+
+	// 与绘图有关的变量
+	uchar image2DBuf[480][480];  // 二维形式
+
+
+	// 几个开关,checkbox用作开关
+	CButton* modeSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_MODESWITCH));
+	CButton* subApertureImageSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_PICSWITCH));
+	CButton* wavefrontSwich = (CButton*)(pW->GetDlgItem(IDC_CHECK_WAVEFRONTSWITCH));
+
+
+#pragma endregion 线程中的局部变量
+
+
+
+#pragma region 闭环前的参数设置
+
+
+	if (modeSwitch->GetCheck() == 1)
+	{
+		//## 设置WFS为高速模式，这个函数只需要设置一次，如果勾选高速模式，那么就调用一下这个函数
+		WFS_SetHighspeedMode(instr.handle, OPTION_HIGHSPEED, OPTION_HS_ADAPT_CENTR, NoiseCutAct, OPTION_ALLOW_AUTOEXPOS);
+	}
+	else
+	{
+		// 关闭高速模式
+		WFS_SetHighspeedMode(instr.handle, 0, OPTION_HS_ADAPT_CENTR, NoiseCutAct, OPTION_ALLOW_AUTOEXPOS);
+
+	}
+
+#pragma endregion 闭环前的参数设置
+
+
+
+#pragma region 计算质心位置
+
+	// 第一步：计算质心位置
+	// 首先判断是用普通模式获得质心位置还是用高速模式获得质心位置
+	// 高速模式速度快，但是没有图像显示
+	// 普通模式速度慢，但是有图像显示
+	if (modeSwitch->GetCheck() == 1)   // 高速模式DSP计算质心，USB cable不传输图像
+	{
+		// 高速模式获取质心位置
+		WFS_GetStatus(instr.handle, &instr.status);
+		std::bitset<32> judge = instr.status & (WFS_STATBIT_HSP | WFS_STATBIT_SPC | WFS_STATBIT_PUD | WFS_STATBIT_CFG);
+		if (judge == 0x2700)
+		{
+		}
+		else
+		{
+			::MessageBox(NULL, _T("不是高速模式！"), _T("Status"), MB_OK);
+		}
+
+		// 检查当前是否为高速模式，这个函数貌似无法检测到底是不是高速模式
+		err = WFS_CheckHighspeedCentroids(instr.handle);
+		if (err == 0)
+		{
+		}
+		else
+		{
+			WFS_HandleErrors(err);
+		}
+
+
+		// 调用下面的函数，就能保证每次DSP计算完，每次循环的时候都会将新数据刷新至内存中，还可以用于图形显示
+		WFS_TakeSpotfieldImage(instr.handle);
+
+	}
+
+
+
+	else   // 普通模式通过图像处理的方法获得质心位置，USB cable传输图像
+	{
+		// 普通模式获取质心位置
+		WFS_TakeSpotfieldImage(instr.handle);
+		// 计算质心位置
+		WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
+
+
+
+#pragma region 显示子孔径图像
+
+		if (subApertureImageSwitch->GetCheck() == 1)
+		{
+
+			// 将图像刷入内存
+			WFS_GetSpotfieldImageCopy(instr.handle, imageBuf, row_image, col_image);
+			// 将图像由一维转为二维，下面的转换经过验证是正确的
+			for (int row = 0; row < 480; ++row)
+				for (int col = 0; col < 480; ++col)
+				{
+					image2DBuf[row][col] = imageBuf[480 * row + col];
+				}
+			//----------------------------------------------------------//
+			//## 监测通道
+			(pW->m_Edit_Sta_Watch).Format(_T("%u"), sizeof(image2DBuf));
+			pW->SetDlgItemTextW(IDC_EDIT_STA_WATCH, pW->m_Edit_Sta_Watch);
+			//----------------------------------------------------------//
+			// 之前使用cvCreateImage配合cvReleaseImage使用，总是内存泄露
+			// 现在cvCreateImageHeader与cvReleaseImageHeader成对使用，解决了内存泄露
+			m_img = cvCreateImageHeader(cvSize(480, 480), 8, 1);
+			cvSetData(m_img, image2DBuf, 480); // 这一句申请了内存，应该是通过cvReleaseImageHeader释放的
+
+
+			// 用于在TAB控件上子孔径标签页上的对话框上的pic控件显示子孔径的实时图像
+			// ptr_SubApertureImageDlg是pW的成员
+			pW->ptr_SubApertureImageDlg->ShowSubApertuerImageFrame();
+
+			// 设置标志
+			if (CMOSImageFlag == FALSE)
+				CMOSImageFlag = TRUE;
+
+		}
+		else
+		{
+			if (CMOSImageFlag == TRUE)
+			{
+				pW->ptr_SubApertureImageDlg->ShowNoCMOSImage();
+			}
+			CMOSImageFlag = FALSE;  // 设置标志
+		}
+
+
+#pragma endregion 显示子孔径图像
+
+
+
+	}
+
+#pragma endregion 计算质心位置
+
+
+
+#pragma region 计算脱靶量
+
+	// 第二步：计算脱靶量
+	// 计算脱靶量
+	WFS_CalcSpotToReferenceDeviations(instr.handle, 1);
+	// 获取质心位置
+	//WFS_GetSpotCentroids(instr.handle, *centroid_x, *centroid_y);
+	// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
+	WFS_GetSpotDeviations(instr.handle, *deviation_x, *deviation_y);
+
+	CButton* deviationSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_DEVIATIONSWITCH));
+	if (deviationSwitch->GetCheck() == 1) // 显示脱靶量
+	{
+		pW->ptr_DeviationXDlg->ShowDeviationX();
+	}
+
+#pragma endregion 计算脱靶量
+
+
+
+#pragma region 获得波前统计信息
+
+	//根据脱靶量重建波前
+	WFS_CalcWavefront(instr.handle, instr_setup.wavefront_type, instr_setup.pupil_circular, *wavefront);
+	WFS_WriteCalcWavefront();  //  输出波前到WFS_CalcWavefront.txt
+
+
+	// 获得波前统计信息 
+	//wavefront_diff=wavefront_max-wavefront_min，这个就是光瞳内的PV值
+	err = WFS_CalcWavefrontStatistics(instr.handle, &wavefront_min, &wavefront_max,
+		&wavefront_diff, &wavefront_mean, &wavefront_rms, &wavefront_weighted_rms);
+	if (err == 0)
+	{
+		// 显示PV值
+		(pW->m_Edit_Sta_PV).Format(_T("%lf"), wavefront_diff);
+		pW->SetDlgItemTextW(IDC_EDIT_STA_PV, pW->m_Edit_Sta_PV);
+
+		// 显示RMS值
+		(pW->m_Edit_Sta_RMS).Format(_T("%lf"), wavefront_rms);
+		pW->SetDlgItemTextW(IDC_EDIT_STA_RMS, pW->m_Edit_Sta_RMS);
+
+	}
+	else
+	{
+		WFS_HandleErrors(err);
+	}
+
+#pragma endregion 获得波前统计信息
 
 	// 线程函数需要一个返回值
 	return 0;
@@ -1343,9 +1975,264 @@ UINT ThreadFunc_WFS_Measurement_DET(LPVOID pParam)
 
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+//## 注意，在波前重建模式下，“波前重建”按钮与“控制DM”按钮要成对使用，因为在“波前重建”按钮中zernikeMatrix_recon要push_back
+//## 而在中，要对应的把zernikeMatrix_recon与zernikeMatrix_recon_1d两个变量pop_back才可以，否则数据堆积，造成无法正确控制DM
 // 波前重建模式下 波前重建线程
 UINT ThreadFunc_WFS_Measurement_REC(LPVOID pParam)
 {
+	// 这个线程函数的作用：探测波前，并使用最小二乘法，将波前重建，然后根据需要选择是否进行保存
+
+
+#pragma region 线程中的局部变量
+
+	// 几个指向对话框的指针
+	CAOSys_v8Dlg* pW = (CAOSys_v8Dlg*)pParam;
+
+	// 与绘图有关的变量
+	uchar image2DBuf[480][480];  // 二维形式
+
+
+	// 几个开关,checkbox用作开关
+	CButton* modeSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_MODESWITCH));
+	CButton* subApertureImageSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_PICSWITCH));
+	CButton* wavefrontSwich = (CButton*)(pW->GetDlgItem(IDC_CHECK_WAVEFRONTSWITCH));
+
+#pragma endregion 线程中的局部变量
+
+
+
+#pragma region 闭环前的参数设置
+
+
+	if (modeSwitch->GetCheck() == 1)
+	{
+		//## 设置WFS为高速模式，这个函数只需要设置一次，如果勾选高速模式，那么就调用一下这个函数
+		WFS_SetHighspeedMode(instr.handle, OPTION_HIGHSPEED, OPTION_HS_ADAPT_CENTR, NoiseCutAct, OPTION_ALLOW_AUTOEXPOS);
+	}
+	else
+	{
+		// 关闭高速模式
+		WFS_SetHighspeedMode(instr.handle, 0, OPTION_HS_ADAPT_CENTR, NoiseCutAct, OPTION_ALLOW_AUTOEXPOS);
+
+	}
+
+#pragma endregion 闭环前的参数设置
+
+
+
+#pragma region 计算质心位置
+
+	// 第一步：计算质心位置
+	// 首先判断是用普通模式获得质心位置还是用高速模式获得质心位置
+	// 高速模式速度快，但是没有图像显示
+	// 普通模式速度慢，但是有图像显示
+	if (modeSwitch->GetCheck() == 1)   // 高速模式DSP计算质心，USB cable不传输图像
+	{
+		// 高速模式获取质心位置
+
+		// 检查是否为高速模式，进行位运算判断运行状态
+		// 正常情况下，这里instr.status返回的是0x2700,说明是：
+		//		0x00000100  WFS_STATBIT_CFG  Camera is ConFiGured
+		//		0x00000200  WFS_STATBIT_PUD  PUpil is Defined
+		//		0x00000400  WFS_STATBIT_SPC  No.of Spots or Pupil Changed
+		//		0x00002000  WFS_STATBIT_HSP  Camera is in HighSPeed Mode
+		WFS_GetStatus(instr.handle, &instr.status);
+		std::bitset<32> judge = instr.status & (WFS_STATBIT_HSP | WFS_STATBIT_SPC | WFS_STATBIT_PUD | WFS_STATBIT_CFG);
+		if (judge == 0x2700)
+		{
+		}
+		else
+		{
+			::MessageBox(NULL, _T("不是高速模式！"), _T("Status"), MB_OK);
+		}
+		// 报错0x1792
+		//0x00000002  WFS_STATBIT_PTH  Power Too High(cam saturated)
+		//0x00000010  WFS_STATBIT_SCL  Spot Contrast too Low
+		//0x00000080  WFS_STATBIT_ATR  Camera is still Awaiting a TRigger
+		//0x00000100  WFS_STATBIT_CFG  Camera is ConFiGured
+		//0x00000200  WFS_STATBIT_PUD  PUpil is Defined
+		//0x00000400  WFS_STATBIT_SPC  No.of Spots or Pupil Changed
+		//0x00001000  WFS_STATBIT_URF  No User ReFerence available
+
+
+
+		// 检查当前是否为高速模式，这个函数貌似无法检测到底是不是高速模式
+		err = WFS_CheckHighspeedCentroids(instr.handle);
+		if (err == 0)
+		{
+		}
+		else
+		{
+			WFS_HandleErrors(err);
+		}
+
+
+		// 调用下面的函数，就能保证每次DSP计算完，每次循环的时候都会将新数据刷新至内存中，还可以用于图形显示
+		WFS_TakeSpotfieldImage(instr.handle);
+
+	}
+
+
+
+	else   // 普通模式通过图像处理的方法获得质心位置，USB cable传输图像
+	{
+		// 普通模式获取质心位置
+		WFS_TakeSpotfieldImage(instr.handle);
+		// 计算质心位置
+		WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
+
+
+
+#pragma region 显示子孔径图像
+
+		if (subApertureImageSwitch->GetCheck() == 1)
+		{
+
+			// 将图像刷入内存
+			WFS_GetSpotfieldImageCopy(instr.handle, imageBuf, row_image, col_image);
+			// 将图像由一维转为二维，下面的转换经过验证是正确的
+			for (int row = 0; row < 480; ++row)
+				for (int col = 0; col < 480; ++col)
+				{
+					image2DBuf[row][col] = imageBuf[480 * row + col];
+				}
+			//----------------------------------------------------------//
+			////## 监测通道
+			//(pW->m_Edit_Sta_Watch).Format(_T("%u"), sizeof(image2DBuf));
+			//pW->SetDlgItemTextW(IDC_EDIT_STA_WATCH, pW->m_Edit_Sta_Watch);
+			//----------------------------------------------------------//
+			// 之前使用cvCreateImage配合cvReleaseImage使用，总是内存泄露
+			// 现在cvCreateImageHeader与cvReleaseImageHeader成对使用，解决了内存泄露
+			m_img = cvCreateImageHeader(cvSize(480, 480), 8, 1);
+			cvSetData(m_img, image2DBuf, 480); // 这一句申请了内存，应该是通过cvReleaseImageHeader释放的
+
+
+			// 用于在TAB控件上子孔径标签页上的对话框上的pic控件显示子孔径的实时图像
+			// ptr_SubApertureImageDlg是pW的成员
+			pW->ptr_SubApertureImageDlg->ShowSubApertuerImageFrame();
+
+			// 设置标志
+			if (CMOSImageFlag == FALSE)
+				CMOSImageFlag = TRUE;
+
+		}
+		else
+		{
+			if (CMOSImageFlag == TRUE)
+			{
+				pW->ptr_SubApertureImageDlg->ShowNoCMOSImage();
+			}
+			CMOSImageFlag = FALSE;  // 设置标志
+		}
+
+
+#pragma endregion 显示子孔径图像
+
+
+
+	}
+
+#pragma endregion 计算质心位置
+
+
+
+#pragma region 计算脱靶量
+
+	// 第二步：计算脱靶量
+	// 计算脱靶量
+	WFS_CalcSpotToReferenceDeviations(instr.handle, 0);
+	// 获取质心位置
+	//WFS_GetSpotCentroids(instr.handle, *centroid_x, *centroid_y);
+	// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
+	WFS_GetSpotDeviations(instr.handle, *deviation_x, *deviation_y);
+
+	CButton* deviationSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_DEVIATIONSWITCH));
+	if (deviationSwitch->GetCheck() == 1) // 显示脱靶量
+	{
+		pW->ptr_DeviationXDlg->ShowDeviationX();
+	}
+
+#pragma endregion 计算脱靶量
+
+
+
+#pragma region 内置函数求zernike系数
+
+	zernike_order = 4; // 0 ： zernike order auto
+	WFS_ZernikeLsf(instr.handle, (ViInt32*)&zernike_order, zernike_um, zernike_orders_rms_um, &roc_mm);
+
+#pragma endregion 内置函数求zernike系数
+
+
+
+#pragma region 获得波前统计信息
+
+	//根据脱靶量重建波前
+	err = WFS_CalcWavefront(instr.handle, 0, instr_setup.pupil_circular, *wavefront);
+	WFS_WriteCalcWavefront();  //  输出波前到WFS_CalcWavefront.txt
+
+
+	// 获得波前统计信息 
+	//wavefront_diff=wavefront_max-wavefront_min，这个就是光瞳内的PV值
+	err = WFS_CalcWavefrontStatistics(instr.handle, &wavefront_min, &wavefront_max,
+		&wavefront_diff, &wavefront_mean, &wavefront_rms, &wavefront_weighted_rms);
+	if (err == 0)
+	{
+		// 显示PV值
+		(pW->m_Edit_Sta_PV).Format(_T("%lf"), wavefront_diff);
+		pW->SetDlgItemTextW(IDC_EDIT_STA_PV, pW->m_Edit_Sta_PV);
+
+		// 显示RMS值
+		(pW->m_Edit_Sta_RMS).Format(_T("%lf"), wavefront_rms);
+		pW->SetDlgItemTextW(IDC_EDIT_STA_RMS, pW->m_Edit_Sta_RMS);
+
+	}
+	else
+	{
+		WFS_HandleErrors(err);
+	}
+
+#pragma endregion 获得波前统计信息
+
+
+
+#pragma region 重建波前矩阵
+
+	//------ 重建波前
+	// 对应float	zernike_um[MAX_ZERNIKE_MODES + 1]的容器变量，vector_zernike_um是局部变量
+	std::vector<double> vector_zernike_um;  // 15个zernike系数
+	for (int i = 1; i <= 15; ++i)		// 一维数组转换为一维vector
+		vector_zernike_um.push_back(zernike_um[i]);
+
+	// 初始化二维重建波前数据矩阵
+	init_2dVector(zernikeMatrix_recon, 12, 12);
+
+
+	// 下面进行数乘和矩阵相加的运算，得到重建的zernike拟合的波前
+	for (int row = 0; row < 12; ++row)
+		for (int col = 0; col < 12; ++col)
+		{
+			zernikeMatrix_recon[row][col] =
+				vector_zernike_um[0] * zernikeMatrix_01[row][col] +
+				vector_zernike_um[1] * zernikeMatrix_02[row][col] +
+				vector_zernike_um[2] * zernikeMatrix_03[row][col] +
+				vector_zernike_um[3] * zernikeMatrix_04[row][col] +
+				vector_zernike_um[4] * zernikeMatrix_05[row][col] +
+				vector_zernike_um[5] * zernikeMatrix_06[row][col] +
+				vector_zernike_um[6] * zernikeMatrix_07[row][col] +
+				vector_zernike_um[7] * zernikeMatrix_08[row][col] +
+				vector_zernike_um[8] * zernikeMatrix_09[row][col] +
+				vector_zernike_um[9] * zernikeMatrix_10[row][col] +
+				vector_zernike_um[10] * zernikeMatrix_11[row][col] +
+				vector_zernike_um[11] * zernikeMatrix_12[row][col] +
+				vector_zernike_um[12] * zernikeMatrix_13[row][col] +
+				vector_zernike_um[13] * zernikeMatrix_14[row][col] +
+				vector_zernike_um[14] * zernikeMatrix_15[row][col];
+		}
+
+#pragma endregion 重建波前矩阵
+
+
 
 
 	return 0;
@@ -1360,6 +2247,904 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 {
 
 
+#pragma region PID算法
+
+	// PID算法
+	if (chooseAlgoIndex == 0)
+	{
+
+
+#pragma region 线程中的局部变量
+
+		// 几个指向对话框的指针
+		CAOSys_v8Dlg* pW = (CAOSys_v8Dlg*)pParam;
+
+
+		// 用于计算帧率的时间变量
+		double t_interval_2nd = 0; // 循环所用时间
+		LARGE_INTEGER nStartCounter_2nd;  // 开始计算次数
+		LARGE_INTEGER nFrequency_2nd;   // 每秒次数
+		LARGE_INTEGER nStopCounter_2nd;  // 终止计算次数
+
+
+		double frameRate = 0;  // 帧率
+		int looptime = 0;
+
+
+		// 与绘图有关的变量
+		uchar image2DBuf[480][480];  // 二维形式
+
+
+		// 几个开关,checkbox用作开关
+		CButton* modeSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_MODESWITCH));
+		CButton* subApertureImageSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_PICSWITCH));
+		CButton* wavefrontSwich = (CButton*)(pW->GetDlgItem(IDC_CHECK_WAVEFRONTSWITCH));
+		CButton* deviationSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_DEVIATIONSWITCH));
+		CButton* showExecuDist = (CButton*)(pW->GetDlgItem(IDC_CHECK_SHOW_EXECDIST));
+
+
+
+		for (int index = 0; index < 140; ++index)
+		{
+			DM_PID_P[index] = 1200;
+		}
+
+
+
+		// 初始化两个坐标数组，在这里调整WFS与DM的相对坐标
+		// DM的物理坐标，变形镜的pitch为400um=0.4mm，一共12个单元
+		double xArray_Mode[12];
+		double yArray_Mode[12];
+		for (int i = 0; i < 12; ++i)
+			xArray_Mode[i] = -2.4 + i * 0.4;
+		for (int i = 0; i < 12; ++i)
+			yArray_Mode[i] = -2.4 + i * 0.4;
+
+
+		int NAN_counter = 0; // 计算NAN数据的个数
+
+
+#pragma endregion 线程中的局部变量
+
+
+
+#pragma region 闭环前的参数设置
+
+
+
+		// 高速模式与普通模式的预设
+		if (modeSwitch->GetCheck() == 1)
+		{
+			//## 设置WFS为高速模式，这个函数只需要设置一次，如果勾选高速模式，那么就调用一下这个函数
+			WFS_SetHighspeedMode(instr.handle, 1, 0, NoiseCutAct, 0);
+		}
+		else
+		{
+			// 关闭高速模式
+			WFS_SetHighspeedMode(instr.handle, 0, 0, NoiseCutAct, 0);
+
+		}
+
+#pragma endregion 闭环前的参数设置
+
+
+
+		// 闭环
+		CloseLoopFlag = TRUE;
+		int count_devi = 0;  // 记录每个时刻的脱靶量
+		while (CloseLoopFlag)
+		{
+
+#pragma region 计时器开始
+			//新计时器开始
+			LARGE_INTEGER nStartCounter_test;
+			LARGE_INTEGER nFrequency_test;
+			double nTime_test = 0; // 记录时间
+
+			::QueryPerformanceCounter(&nStartCounter_test);
+			::QueryPerformanceFrequency(&nFrequency_test);
+#pragma endregion 计时器开始
+
+
+
+#pragma region 帧率显示
+			// 帧率---起始部分
+			::QueryPerformanceCounter(&nStartCounter_2nd);
+			::QueryPerformanceFrequency(&nFrequency_2nd);
+
+#pragma endregion 帧率显示
+
+
+
+#pragma region 计算质心位置
+
+			// 第一步：计算质心位置
+			// 首先判断是用普通模式获得质心位置还是用高速模式获得质心位置
+			// 高速模式速度快，但是没有图像显示
+			// 普通模式速度慢，但是有图像显示
+			if (modeSwitch->GetCheck() == 1)   // 高速模式DSP计算质心，USB cable不传输图像
+			{
+				// 高速模式获取质心位置
+
+				// 检查是否为高速模式，进行位运算判断运行状态
+				// 正常情况下，这里instr.status返回的是0x2700,说明是：
+				//		0x00000100  WFS_STATBIT_CFG  Camera is ConFiGured
+				//		0x00000200  WFS_STATBIT_PUD  PUpil is Defined
+				//		0x00000400  WFS_STATBIT_SPC  No.of Spots or Pupil Changed
+				//		0x00002000  WFS_STATBIT_HSP  Camera is in HighSPeed Mode
+				WFS_GetStatus(instr.handle, &instr.status);
+				std::bitset<32> judge = instr.status & (WFS_STATBIT_HSP | WFS_STATBIT_SPC | WFS_STATBIT_PUD | WFS_STATBIT_CFG);
+				if (judge == 0x2700)
+				{
+				}
+				else
+				{
+					::MessageBox(NULL, _T("不是高速模式！"), _T("Status"), MB_OK);
+					break;
+				}
+				// 报错0x1792
+				//0x00000002  WFS_STATBIT_PTH  Power Too High(cam saturated)
+				//0x00000010  WFS_STATBIT_SCL  Spot Contrast too Low
+				//0x00000080  WFS_STATBIT_ATR  Camera is still Awaiting a TRigger
+				//0x00000100  WFS_STATBIT_CFG  Camera is ConFiGured
+				//0x00000200  WFS_STATBIT_PUD  PUpil is Defined
+				//0x00000400  WFS_STATBIT_SPC  No.of Spots or Pupil Changed
+				//0x00001000  WFS_STATBIT_URF  No User ReFerence available
+
+
+
+				// 检查当前是否为高速模式，这个函数貌似无法检测到底是不是高速模式
+				err = WFS_CheckHighspeedCentroids(instr.handle);
+				if (err == 0)
+				{
+				}
+				else
+				{
+					WFS_HandleErrors(err);
+				}
+
+
+				// 调用下面的函数，就能保证每次DSP计算完，每次循环的时候都会将新数据刷新至内存中，还可以用于图形显示
+				WFS_TakeSpotfieldImage(instr.handle);
+
+			}
+
+
+
+			else   // 普通模式通过图像处理的方法获得质心位置，USB cable传输图像
+			{
+				// 普通模式获取质心位置
+				WFS_TakeSpotfieldImage(instr.handle);
+				// 计算质心位置
+				WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
+
+
+
+#pragma region 显示子孔径图像
+
+				if (subApertureImageSwitch->GetCheck() == 1)
+				{
+
+					// 将图像刷入内存
+					WFS_GetSpotfieldImageCopy(instr.handle, imageBuf, row_image, col_image);
+					// 将图像由一维转为二维，下面的转换经过验证是正确的
+					for (int row = 0; row < 480; ++row)
+						for (int col = 0; col < 480; ++col)
+						{
+							image2DBuf[row][col] = imageBuf[480 * row + col];
+						}
+					//----------------------------------------------------------//
+					////## 监测通道
+					//(pW->m_Edit_Sta_Watch).Format(_T("%u"), sizeof(image2DBuf));
+					//pW->SetDlgItemTextW(IDC_EDIT_STA_WATCH, pW->m_Edit_Sta_Watch);
+					//----------------------------------------------------------//
+					// 之前使用cvCreateImage配合cvReleaseImage使用，总是内存泄露
+					// 现在cvCreateImageHeader与cvReleaseImageHeader成对使用，解决了内存泄露
+					m_img = cvCreateImageHeader(cvSize(480, 480), 8, 1);
+					cvSetData(m_img, image2DBuf, 480); // 这一句申请了内存，应该是通过cvReleaseImageHeader释放的
+
+
+					// 用于在TAB控件上子孔径标签页上的对话框上的pic控件显示子孔径的实时图像
+					// ptr_SubApertureImageDlg是pW的成员
+					pW->ptr_SubApertureImageDlg->ShowSubApertuerImageFrame();
+
+					// 设置标志
+					if (CMOSImageFlag == FALSE)
+						CMOSImageFlag = TRUE;
+
+				}
+				else
+				{
+					if (CMOSImageFlag == TRUE)
+					{
+						pW->ptr_SubApertureImageDlg->ShowNoCMOSImage();
+					}
+					CMOSImageFlag = FALSE;  // 设置标志
+				}
+
+
+#pragma endregion 显示子孔径图像
+
+
+
+			}
+
+#pragma endregion 计算质心位置
+
+
+
+#pragma region 计算脱靶量
+
+			// 第二步：计算脱靶量
+			// 计算脱靶量
+			WFS_CalcSpotToReferenceDeviations(instr.handle, instr_setup.cancel_tilt);
+			// 获取质心位置
+			WFS_GetSpotCentroids(instr.handle, *centroid_x, *centroid_y);
+			// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
+			WFS_GetSpotDeviations(instr.handle, *deviation_x, *deviation_y);
+			//## 监测通道
+			//(pW->m_Edit_Sta_Watch).Format(_T("%lf"), deviation_x[14][14]);
+			//pW->SetDlgItemTextW(IDC_EDIT_STA_WATCH, pW->m_Edit_Sta_Watch);
+
+
+
+#pragma region 复杂的无效数据处理办法
+
+			for (int row = 1; row < 28; ++row)  // 空出最上下两行
+			{
+				for (int col = 1; col < 28; ++col) // 空出最左右两列
+				{
+
+					// 判断x方向
+					if (_isnan(deviation_x[row][col]))
+					{
+						++NAN_counter;
+						// 排列方式
+						//  x x x
+						//  x o x
+						//  x x x
+
+						if (_isnan(deviation_x[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
+							_isnan(deviation_x[row - 1][col]) &&
+							_isnan(deviation_x[row - 1][col + 1]) &&
+							_isnan(deviation_x[row][col - 1]) &&
+							_isnan(deviation_x[row][col + 1]) &&
+							_isnan(deviation_x[row + 1][col - 1]) &&
+							_isnan(deviation_x[row + 1][col]) &&
+							_isnan(deviation_x[row + 1][col + 1]))
+						{
+							str_showerror = "警报：PID算法  X方向脱靶量  过多无效数据！ 无效数据已置零！";
+							pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+							deviation_x[row][col] = 0;
+						}
+						else
+						{
+							// 排列方式
+							//  x x x
+							//  x o x
+							//  x x x
+
+							int mean_counter = 0;  // 有效值个数
+							float mean_value = 0;  // 有效值的和
+
+							if (!_isnan(deviation_x[row - 1][col - 1]))  // 上左
+							{
+								mean_value = mean_value + deviation_x[row - 1][col - 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_x[row - 1][col])) // 上中
+							{
+								mean_value = mean_value + deviation_x[row - 1][col];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_x[row - 1][col + 1])) // 上右
+							{
+								mean_value = mean_value + deviation_x[row - 1][col + 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_x[row][col - 1])) // 中左
+							{
+								mean_value = mean_value + deviation_x[row][col - 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_x[row][col + 1])) // 中右
+							{
+								mean_value = mean_value + deviation_x[row][col + 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_x[row + 1][col - 1])) // 下左
+							{
+								mean_value = mean_value + deviation_x[row + 1][col - 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_x[row + 1][col]))  // 下中
+							{
+								mean_value = mean_value + deviation_x[row + 1][col];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_x[row + 1][col + 1]))  // 下右
+							{
+								mean_value = mean_value + deviation_x[row + 1][col + 1];
+								mean_counter++;
+							}
+
+							deviation_x[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
+
+							str_showerror = "警报：PID算法  X方向脱靶量  无效数据已被插值";
+							pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+						}
+
+
+					}  // x方向结束
+
+
+
+					// 判断y方向
+					if (_isnan(deviation_y[row][col]))
+					{
+						++NAN_counter;
+
+						// 排列方式
+						//  x x x
+						//  x o x
+						//  x x x
+
+						if (_isnan(deviation_y[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
+							_isnan(deviation_y[row - 1][col]) &&
+							_isnan(deviation_y[row - 1][col + 1]) &&
+							_isnan(deviation_y[row][col - 1]) &&
+							_isnan(deviation_y[row][col + 1]) &&
+							_isnan(deviation_y[row + 1][col - 1]) &&
+							_isnan(deviation_y[row + 1][col]) &&
+							_isnan(deviation_y[row + 1][col + 1]))
+						{
+							str_showerror = "警报：PID算法  Y方向脱靶量  过多无效数据！ 无效数据已置零！";
+							pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+							deviation_y[row][col] = 0;
+						} // 强制置零结束
+						else
+						{
+							// 排列方式
+							//  x x x
+							//  x o x
+							//  x x x
+
+							int mean_counter = 0;  // 有效值个数
+							float mean_value = 0;  // 有效值的和
+
+							if (!_isnan(deviation_y[row - 1][col - 1]))  // 上左
+							{
+								mean_value = mean_value + deviation_y[row - 1][col - 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_y[row - 1][col])) // 上中
+							{
+								mean_value = mean_value + deviation_y[row - 1][col];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_y[row - 1][col + 1])) // 上右
+							{
+								mean_value = mean_value + deviation_y[row - 1][col + 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_y[row][col - 1])) // 中左
+							{
+								mean_value = mean_value + deviation_y[row][col - 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_y[row][col + 1])) // 中右
+							{
+								mean_value = mean_value + deviation_y[row][col + 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_y[row + 1][col - 1])) // 下左
+							{
+								mean_value = mean_value + deviation_y[row + 1][col - 1];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_y[row + 1][col]))  // 下中
+							{
+								mean_value = mean_value + deviation_y[row + 1][col];
+								mean_counter++;
+							}
+							if (!_isnan(deviation_y[row + 1][col + 1]))  // 下右
+							{
+								mean_value = mean_value + deviation_y[row + 1][col + 1];
+								mean_counter++;
+							}
+
+							deviation_y[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
+
+							str_showerror = "警报：PID算法  Y方向脱靶量  无效数据已被插值";
+							pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+						}  // 对中心无效值插值结束
+
+					} // y方向结束
+
+				}
+			}  // 无效值遍历结束
+
+#pragma endregion 复杂的无效数据处理办法
+
+
+			//
+			//#pragma region 简单处理无效数据的方法
+			//
+			//			NAN_counter = 0;
+			//			for (int row = 0; row < 29; ++row)
+			//			{
+			//				for (int col = 0; col < 29; ++col)
+			//				{
+			//					if (_isnan(deviation_x[row][col]))
+			//					{
+			//						++NAN_counter; // 计数器加一
+			//						FLAG_NAN = 1;  // 将标志位赋值为1，表示存在NAN数据
+			//						str_showerror = "警报：PID算法  X脱靶量  中出现NAN数据！";
+			//						pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+			//
+			//						deviation_x[row][col] = 0;
+			//
+			//					}
+			//					if (_isnan(deviation_y[row][col]))
+			//					{
+			//						++NAN_counter; // 计数器加一
+			//						FLAG_NAN = 1;  // 将标志位赋值为1，表示存在NAN数据
+			//						str_showerror = "警报：PID算法  Y脱靶量  中出现NAN数据！";
+			//						pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+			//
+			//
+			//						deviation_y[row][col] = 0;
+			//					}
+			//				}
+			//			}  // 无效值遍历结束
+			//
+			//#pragma endregion 简单处理无效数据的方法
+			//
+
+
+			// 显示无效点的个数
+			(pW->m_Edit_Sta_Watch).Format(_T("%d"), NAN_counter);
+			pW->SetDlgItemTextW(IDC_EDIT_STA_WATCH, pW->m_Edit_Sta_Watch);
+
+
+
+
+			if (deviationSwitch->GetCheck() == 1) // 显示脱靶量，单位是pixel
+			{
+				pW->ptr_DeviationXDlg->ShowDeviationX();
+			}
+
+			// 记录每次循环的脱靶量
+			if (pW->ptr_MiscSettingDlg->m_Check_SubDlg_RemeberDevi.GetCheck() == 1)
+			{
+				// 显示一个动态的省略号
+				if (0 == count_devi % 4)
+				{
+					(pW->ptr_MiscSettingDlg->GetDlgItem(IDC_STATIC_REMEMBER_STATE))->
+						SetWindowText(_T("数据记录中"));
+				}
+				if (1 == count_devi % 4)
+				{
+					(pW->ptr_MiscSettingDlg->GetDlgItem(IDC_STATIC_REMEMBER_STATE))->
+						SetWindowText(_T("数据记录中."));
+				}
+				if (2 == count_devi % 4)
+				{
+					(pW->ptr_MiscSettingDlg->GetDlgItem(IDC_STATIC_REMEMBER_STATE))->
+						SetWindowText(_T("数据记录中.."));
+				}
+				if (3 == count_devi % 4)
+				{
+					(pW->ptr_MiscSettingDlg->GetDlgItem(IDC_STATIC_REMEMBER_STATE))->
+						SetWindowText(_T("数据记录中..."));
+				}
+
+
+				// 将脱靶量记录到三维数组中
+				for (int row = 0; row < 29; ++row)
+					for (int col = 0; col < 29; ++col)
+					{
+						rememberDeviationX[row][col][count_devi] = deviation_x[row][col];
+						rememberDeviationY[row][col][count_devi] = deviation_y[row][col];
+					}
+
+
+				++count_devi; // 计数器要自加
+
+
+				if (100 == count_devi)
+				{
+					(pW->ptr_MiscSettingDlg->GetDlgItem(IDC_STATIC_REMEMBER_STATE))->
+						SetWindowText(_T("数据已满，请中断点击保存！"));
+					pW->ptr_MiscSettingDlg->m_Check_SubDlg_RemeberDevi.SetCheck(BST_UNCHECKED); // 取消check，这样下次循环就不进入if语句
+				}
+
+			}
+
+
+
+#pragma endregion 计算脱靶量
+
+
+
+#pragma region 内置函数求zernike系数
+
+			// 拟合zernike系数
+			zernike_order = 4; // 0 ： zernike order auto
+			WFS_ZernikeLsf(instr.handle, (ViInt32*)&zernike_order, zernike_um, zernike_orders_rms_um, &roc_mm);
+
+
+			// 显示zernike系数
+			CString showZernike;
+			for (int index = 0; index < 15; ++index)
+			{
+				showZernike.Format(_T("%lf"), zernike_um[index + 1]);
+				pW->SetDlgItemText(IDC_STATIC_SHOW_ZER1 + index, showZernike);
+
+			}
+
+
+			//// 记录zernike系数
+			//std::vector<double> zernike_um_save(15);
+			//for (int index = 0; index < 15;++index)
+			//{
+			//	zernike_um_save[index] = (double)zernike_um[index + 1];
+			//}
+			//write_1d_File("D:\\WorkSpace\\Matlab\\N1_Temp\\zernike_um_save.txt", zernike_um_save);
+
+			//// 将zernike_um数重新赋值
+			//for (int index = 0; index < 15;++index)
+			//{
+			//zernike_um[0] = -0.45;
+			//zernike_um[1] = 0.837;
+			//zernike_um[2] = 0.068;
+			//zernike_um[3] = 0.03;
+			//zernike_um[4] = -0.561;
+			//zernike_um[5] = 0.112;
+			//zernike_um[6] = -0.009;
+			//zernike_um[7] = 0.048;
+			//zernike_um[8] = -0.006;
+			//zernike_um[9] = -0.029;
+			//zernike_um[10] = -0.015;
+			//zernike_um[11] = -0.015;
+			//zernike_um[12] = -0.006;
+			//zernike_um[13] = -0.009;
+			//zernike_um[14] = -0.007;
+			//}
+
+
+#pragma endregion 内置函数求zernike系数
+
+
+
+#pragma region 重建波前矩阵
+
+
+			// 初始化二维重建波前数据矩阵
+			init_2dVector(zernikeMatrix_recon, 12, 12);
+
+
+			// 下面进行数乘和矩阵相加的运算，得到重建的zernike拟合的波前
+			for (int row = 0; row < 12; ++row)
+				for (int col = 0; col < 12; ++col)
+				{
+					zernikeMatrix_recon[row][col] =   // zernikeMatrix_recon在本程序中是一个全局数组，类外调用已经使用extern声明
+						zernike_um[1] * zernikeMatrix_01[row][col] +
+						zernike_um[2] * zernikeMatrix_02[row][col] +
+						zernike_um[3] * zernikeMatrix_03[row][col] +
+						zernike_um[4] * zernikeMatrix_04[row][col] +
+						zernike_um[5] * zernikeMatrix_05[row][col] +
+						zernike_um[6] * zernikeMatrix_06[row][col] +
+						zernike_um[7] * zernikeMatrix_07[row][col] +
+						zernike_um[8] * zernikeMatrix_08[row][col] +
+						zernike_um[9] * zernikeMatrix_09[row][col] +
+						zernike_um[10] * zernikeMatrix_10[row][col] +
+						zernike_um[11] * zernikeMatrix_11[row][col] +
+						zernike_um[12] * zernikeMatrix_12[row][col] +
+						zernike_um[13] * zernikeMatrix_13[row][col] +
+						zernike_um[14] * zernikeMatrix_14[row][col] +
+						zernike_um[15] * zernikeMatrix_15[row][col];
+				}  // 到此为止，vector_zernike_um就用完了，因此，一定要弹出才可以
+
+			write_2d_File("D:\\WorkSpace\\Matlab\\N1_Temp\\zernikeMatrix_recon.txt", zernikeMatrix_recon);
+
+
+			// 二维数组转一维数组，为了排序进行计算PV和RMS
+			int temp_counter = 0;
+			for (int row = 0; row < 12; ++row)
+			{
+				for (int col = 0; col < 12; ++col)
+				{
+					// 提取光瞳内的数据
+					if (sqrt(pow(xArray_Mode[row], 2) + pow(yArray_Mode[col], 2)) <= (instr_setup.pupil_dia_x_mm) / 2)
+					{
+						zernikeMatrix_recon_ParaCal[temp_counter] = zernikeMatrix_recon[row][col];
+						++temp_counter;
+					}
+
+				}
+			}
+
+
+
+#pragma endregion 重建波前矩阵
+
+
+
+#pragma region 波前统计参数
+
+			// sort会重新按照由小到大的顺序重新覆盖zernikeMatrix_recon_ParaCal
+			sort(zernikeMatrix_recon_ParaCal.begin(), zernikeMatrix_recon_ParaCal.end());
+			int index_end = zernikeMatrix_recon_ParaCal.size() - 1;
+
+			// 求均值
+			wavefront_mean = 0;
+			for (int index = 0; index < index_end + 1; ++index)
+			{
+				wavefront_mean = wavefront_mean + zernikeMatrix_recon_ParaCal[index];
+			}
+			wavefront_mean = wavefront_mean / 144;
+
+
+			// PV值
+			wavefront_diff = zernikeMatrix_recon_ParaCal[index_end] - zernikeMatrix_recon_ParaCal[0];
+
+			// RMS值
+			wavefront_rms = 0;
+			for (int index = 0; index < index_end + 1; ++index)
+			{
+				wavefront_rms = wavefront_rms + pow(zernikeMatrix_recon_ParaCal[index], 2);
+			}
+			wavefront_rms = sqrt(wavefront_rms / (index_end - 1));
+
+
+			// 显示PV值
+			(pW->m_Edit_Sta_PV).Format(_T("%lf"), wavefront_diff);
+			pW->SetDlgItemTextW(IDC_EDIT_STA_PV, pW->m_Edit_Sta_PV);
+			// 显示RMS值
+			(pW->m_Edit_Sta_RMS).Format(_T("%lf"), wavefront_rms);
+			pW->SetDlgItemTextW(IDC_EDIT_STA_RMS, pW->m_Edit_Sta_RMS);
+
+#pragma endregion 波前统计参数
+
+
+
+#pragma region 将数据发送给DM
+
+			// 矩阵旋转功能
+			// 初始化用于保存旋转后的数据二维向量
+			init_2dVector(zernikeMatrix_recon_rotate, 12, 12);
+			if (90 == angleRotate)  // 顺时针旋转90度，下面都是顺时针
+			{
+				MatrixRotate90_vector(zernikeMatrix_recon_rotate, zernikeMatrix_recon);
+			}
+			else if (180 == angleRotate)
+			{
+				MatrixRotate180_vector(zernikeMatrix_recon_rotate, zernikeMatrix_recon);
+			}
+			else if (270 == angleRotate)
+			{
+				MatrixRotate270_vector(zernikeMatrix_recon_rotate, zernikeMatrix_recon);
+			}
+			else if (1 == angleRotate)   // 上下翻转
+			{
+				MatrixFlipUpDown_vector(zernikeMatrix_recon_rotate, zernikeMatrix_recon);
+			}
+			else if (2 == angleRotate) // 左右翻转
+			{
+				MatrixFlipLeftRight_vector(zernikeMatrix_recon_rotate, zernikeMatrix_recon);
+			}
+			else if (3 == angleRotate)  // 上下翻转后左右翻转
+			{
+				MatrixFlipUpDown_vector(zernikeMatrix_recon_rotate, zernikeMatrix_recon);
+				MatrixFlipLeftRight_vector(zernikeMatrix_recon_rotate, zernikeMatrix_recon);
+			}
+			else
+			{
+				// 默认
+				MatrixRotate0_vector(zernikeMatrix_recon_rotate, zernikeMatrix_recon);
+			}
+
+
+
+			// 初始化一个用于中转的一维vector
+			std::vector<double> zernikeMatrix_recon_1d(144);
+
+			// 二维数据转为一维数据
+			for (int i = 0; i < 12; ++i)
+				for (int j = 0; j < 12; ++j)
+					zernikeMatrix_recon_1d[i * 12 + j] = zernikeMatrix_recon_rotate[i][j];
+
+
+			// 要删除4个元素
+			zernikeMatrix_recon_1d.erase(zernikeMatrix_recon_1d.begin());
+			zernikeMatrix_recon_1d.erase(zernikeMatrix_recon_1d.begin() + 10);
+			zernikeMatrix_recon_1d.erase(zernikeMatrix_recon_1d.begin() + 130);
+			zernikeMatrix_recon_1d.erase(zernikeMatrix_recon_1d.begin() + 140);
+
+			//将140个元素的一维vector转为数组, 删除元素之后的一维vector用于输出到文件
+			double tempIncrease = 0;
+			for (int i = 0; i < 140; ++i)
+			{
+
+				// P环节
+				tempIncrease = zernikeMatrix_recon_1d[i] * 500 * pid_p;
+
+				//if (tempIncrease > 50)
+				//{
+				//	tempIncrease = 50;
+				//}
+				//if (tempIncrease < -50)
+				//{
+				//	tempIncrease = -50;
+				//}
+
+
+				DM_PID_P[i] = DM_PID_P[i] + tempIncrease;
+				// 发给变形镜  
+				zernikeMatrix_recon_array[i] = DM_PID_P[i];
+				
+				//zernikeMatrix_recon_array[i] = tempIncrease + 1200;
+
+
+				 //变形镜没有校准 用于比对zernike系数
+				//zernikeMatrix_recon_array[i] = 0;
+
+			}
+
+
+			// 量程范围控制
+			for (int index = 0; index < 140; ++index)
+			{
+				if (zernikeMatrix_recon_array[index] < 0)
+				{
+					zernikeMatrix_recon_array[index] = 0;
+				}
+				if (zernikeMatrix_recon_array[index] > 3000)
+				{
+					zernikeMatrix_recon_array[index] = 3000;
+				}
+			}
+
+
+			P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
+			aoSystemData->dDMDesired = zernikeMatrix_recon_array;
+			int status = P_DM_SetSpatialFrame();
+
+			write_2d_File("D:\\WorkSpace\\Matlab\\N1_Temp\\send2DMflip.txt", zernikeMatrix_recon_rotate);
+
+
+
+			// 选择是否显示执行量(PID算法)
+			float temp;
+			if (showExecuDist->GetCheck() == 1)
+			{
+
+				for (int k_index = 1; k_index < 11; ++k_index)
+				{
+					temp = zernikeMatrix_recon_array[k_index - 1];
+					(pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]).Format(_T("%lf"), temp);
+					pW->ptr_DeformMirrorDlg->SetDlgItemTextW(IDC_EDIT_DM_M001 + k_index, pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]);
+
+				}
+				for (int k_index = 12; k_index < 132; ++k_index)
+				{
+					temp = zernikeMatrix_recon_array[k_index - 2];
+					(pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]).Format(_T("%lf"), temp);
+					pW->ptr_DeformMirrorDlg->SetDlgItemTextW(IDC_EDIT_DM_M001 + k_index, pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]);
+
+				}
+				for (int k_index = 133; k_index < 143; ++k_index)
+				{
+					temp = zernikeMatrix_recon_array[k_index - 3];
+					(pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]).Format(_T("%lf"), temp);
+					pW->ptr_DeformMirrorDlg->SetDlgItemTextW(IDC_EDIT_DM_M001 + k_index, pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]);
+
+				}
+			}
+
+
+
+
+
+
+#pragma endregion 将数据发送给DM
+
+
+
+			if (pW->ptr_MiscSettingDlg->m_Check_SubDlg_TimeSetter.GetCheck() == 1)  // 选择是否进行计时
+			{
+
+				do
+				{
+
+#pragma region 计时器结束
+
+					LARGE_INTEGER nStopCounter_test;
+					::QueryPerformanceCounter(&nStopCounter_test);
+					nTime_test = 1000 * ((double)nStopCounter_test.QuadPart - (double)nStartCounter_test.QuadPart) / (double)nFrequency_test.QuadPart;    // 单位 ms
+
+					//显示计时器
+					pW->m_Edit_Sta_Time.Format(_T("%lf"), nTime_test);
+					pW->SetDlgItemText(IDC_EDIT_STA_TIME, pW->m_Edit_Sta_Time);
+
+#pragma endregion 计时器结束
+
+
+				} while (nTime_test < timerSetterInterval);
+
+
+#pragma region 帧率显示
+
+				//-----------------------------------------//
+				// 帧率---终止部分
+				::QueryPerformanceCounter(&nStopCounter_2nd);
+				// 时间间隔，单位s
+				t_interval_2nd = (double)(nStopCounter_2nd.QuadPart - nStartCounter_2nd.QuadPart) / (double)nFrequency_2nd.QuadPart;
+				frameRate = (double)1 / t_interval_2nd;  // WFS的刷新频率，也是闭环的频率，单位Hz
+				pW->m_Edit_Sta_Frame.Format(_T("%lf"), frameRate);
+				pW->SetDlgItemText(IDC_EDIT_STA_FRAME, pW->m_Edit_Sta_Frame);
+				//-----------------------------------------//
+
+#pragma endregion 帧率显示
+
+
+
+			}
+			else
+			{
+
+#pragma region 计时器结束
+
+				LARGE_INTEGER nStopCounter_test;
+				::QueryPerformanceCounter(&nStopCounter_test);
+				nTime_test = 1000 * ((double)nStopCounter_test.QuadPart - (double)nStartCounter_test.QuadPart) / (double)nFrequency_test.QuadPart;    // 单位 ms
+
+				//显示计时器
+				pW->m_Edit_Sta_Time.Format(_T("%lf"), nTime_test);
+				pW->SetDlgItemText(IDC_EDIT_STA_TIME, pW->m_Edit_Sta_Time);
+
+#pragma endregion 计时器结束
+
+
+#pragma region 帧率显示
+
+				//-----------------------------------------//
+				// 帧率---终止部分
+				::QueryPerformanceCounter(&nStopCounter_2nd);
+				// 时间间隔，单位s
+				t_interval_2nd = (double)(nStopCounter_2nd.QuadPart - nStartCounter_2nd.QuadPart) / (double)nFrequency_2nd.QuadPart;
+				frameRate = (double)1 / t_interval_2nd;  // WFS的刷新频率，也是闭环的频率，单位Hz
+				pW->m_Edit_Sta_Frame.Format(_T("%lf"), frameRate);
+				pW->SetDlgItemText(IDC_EDIT_STA_FRAME, pW->m_Edit_Sta_Frame);
+				//-----------------------------------------//
+
+#pragma endregion 帧率显示
+
+
+			}
+
+
+
+			// 释放未旋转的二维向量
+			release_2dVector(zernikeMatrix_recon, 12);
+			// 一旦用完zernikeMatrix_recon_rotate，立即弹出全部数据
+			release_2dVector(zernikeMatrix_recon_rotate, 12);
+
+
+		}  // 闭环while结束
+
+	}// if结束，PID算法结束
+
+#pragma endregion PID算法
+
+
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 
 #pragma region 梯度算法
 
@@ -1373,59 +3158,27 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 		// 几个指向对话框的指针
 		CAOSys_v8Dlg* pW = (CAOSys_v8Dlg*)pParam;
 
-
-		// 默认操作中变形镜的执行量
-		double zernikeMatrix_recon_array_DEFAULT[140];
-		// 加操作中变形镜的执行量
-		double zernikeMatrix_recon_array_ADD[140];
-		// 减操作中变形镜的执行量
-		double zernikeMatrix_recon_array_MINUS[140];
-
-		// 默认操作的波前统计参数
-		double     wavefront_min_default, wavefront_max_default, wavefront_diff_default, wavefront_mean_default, wavefront_rms_default, wavefront_weighted_rms_default;
-		// 加操作的波前统计参数
-		double     wavefront_min_add, wavefront_max_add, wavefront_diff_add, wavefront_mean_add, wavefront_rms_add, wavefront_weighted_rms_add;
-		// 减操作的波前统计参数
-		double     wavefront_min_minus, wavefront_max_minus, wavefront_diff_minus, wavefront_mean_minus, wavefront_rms_minus, wavefront_weighted_rms_minus;
-
-		// 评价函数值
-		double meritFunctionValueDefault = 100;
-		double meritFunctionValueAdd = 0;
-		double meritFunctionValueMinus = 0;
-
-		// 梯度方向
-		BOOL DEFAULE_evolve = FALSE;
-		BOOL ADD_evolve = FALSE;
-		BOOL MINUS_evolve = FALSE;
-
-		double randNum = 50;   // 每个单元的步进值，如果发生不能前进的情况，要采取某种策略改变这个步长
-
-		// 用于显示CMOS图像
+		// 与绘图有关的变量
 		uchar image2DBuf[480][480];  // 二维形式
-
-
-		// 几个开关
 		CButton* subApertureImageSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_PICSWITCH));  // 显示图像
 		CButton* deviationSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_DEVIATIONSWITCH));  // 显示脱靶量
-		CButton* showExecuDist = (CButton*)(pW->GetDlgItem(IDC_CHECK_SHOW_EXECDIST));  // 显示变形镜的执行量
+		CButton* showExecuDist = (CButton*)(pW->GetDlgItem(IDC_CHECK_SHOW_EXECDIST));
+
+
+		// 评价函数值
+		double meritFunctionValue = 100;			// 当前循环的评价函数值
+		double meritFunctionValueAdd = 0;		// 给变形镜施加“加随机矩阵”后的评价函数值
+		double meritFunctionValueMinus = 0;		// 给变形镜施加“减随机矩阵”后的评价函数值
 
 
 		int NAN_counter = 0; // 计算NAN数据的个数
 
-		CString gradientDirection;  // 用于显示梯度方向
-
-
-		// 用于记录梯度算法三种操作的评价函数变化和梯度方向
-		std::vector<std::vector<double>> gradientMerit_vector;
-		gradientMerit_vector.resize(3);  // 保存三个操作
-		for (int index = 0; index < 3; ++index)
-		{
-			gradientMerit_vector[index].resize(200);   // 记录200个采样点
-		}
-		std::vector<double> gradientDirection_vector;  // 记录梯度算法的前进方向
-		gradientDirection_vector.resize(200);
-		int counter_recordMerit = 0;  // 用于记录评价函数时的计数器，进入闭环之前要置零
-		int counter_recordGradientDirection = 0;    //  用于记录梯度进行方向的计数器，进入闭环之前要置零
+		// 用于计算帧率的时间变量
+		double t_interval_2nd = 0; // 循环所用时间
+		LARGE_INTEGER nStartCounter_2nd;  // 开始计算次数
+		LARGE_INTEGER nFrequency_2nd;   // 每秒次数
+		LARGE_INTEGER nStopCounter_2nd;  // 终止计算次数
+		double frameRate = 0;  // 帧率
 
 
 
@@ -1437,7 +3190,7 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 			xArray_29[i] = -2.1 + i * 0.15;
 		for (int i = 0; i < 29; ++i)
 			yArray_29[i] = -2.1 + i * 0.15;
-		// 计算光瞳矩阵，光瞳直径需要设置
+		// 计算光瞳矩阵
 		float pupil_deviation[29][29];
 		for (int row = 0; row < 29; ++row)
 		{
@@ -1449,6 +3202,9 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 			}
 		}
 
+		// 用于存储光瞳限制的deviation矩阵
+		float deviation_x_pupil[29][29];
+		float deviation_y_pupil[29][29];
 
 
 
@@ -1457,50 +3213,1302 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 
 
 
-		// 设置变形镜的驱动量
-		zernikeMatrix_recon_array_DEFAULT[65] = 2000;
-		zernikeMatrix_recon_array_DEFAULT[66] = 2000;
-		zernikeMatrix_recon_array_DEFAULT[77] = 2000;
-		zernikeMatrix_recon_array_DEFAULT[78] = 2000;
 
-
-		// 发送给变形镜
-		DriveDeformMirror_nm(zernikeMatrix_recon_array_DEFAULT);  // 驱动变形镜运动
-
-		wait4U(10);  // 等待一段时间
-
-		Detect_Wavefront2Deviation_Normal();  // 探测波前，获得脱靶量
-
-
-		// WFS重建波前
-		//根据脱靶量重建波前,wavefront数组的单位是um
-		WFS_CalcWavefront(instr.handle, 0, instr_setup.pupil_circular, *wavefront);
-
-		std::vector<std::vector<double>> wavefront_vector;
-		wavefront_vector.resize(29);
-		for (int index = 0; index < 29; ++index)
+		// 最终执行量的初始值
+		for (int index = 0; index < 140; ++index)
 		{
-			wavefront_vector[index].resize(29);
+			zernikeMatrix_recon_array_DEFAULT[index] = 1200;
 		}
-		for (int row = 0; row < 29; ++row)
+
+
+
+
+
+		// 闭环循环
+		CloseLoopFlag = TRUE;
+		while (CloseLoopFlag)
 		{
-			for (int col = 0; col < 29; ++col)
+
+			// 显示三个评价函数值
+			CString showMerit;
+
+			showMerit.Format(_T("%lf"), meritFunctionValueAdd);
+			pW->SetDlgItemText(IDC_STATIC_SHOW1, showMerit);
+
+			showMerit.Format(_T("%lf"), meritFunctionValueMinus);
+			pW->SetDlgItemText(IDC_STATIC_SHOW2, showMerit);
+
+			showMerit.Format(_T("%lf"), meritFunctionValue);
+			pW->SetDlgItemText(IDC_STATIC_SHOW3, showMerit);
+
+
+
+#pragma region 计时器开始
+			//新计时器开始
+			LARGE_INTEGER nStartCounter_test;
+			LARGE_INTEGER nFrequency_test;
+			double nTime_test = 0; // 记录时间
+
+			::QueryPerformanceCounter(&nStartCounter_test);
+			::QueryPerformanceFrequency(&nFrequency_test);
+#pragma endregion 计时器开始
+
+
+
+#pragma region 帧率显示
+			// 帧率---起始部分
+			::QueryPerformanceCounter(&nStartCounter_2nd);
+			::QueryPerformanceFrequency(&nFrequency_2nd);
+
+#pragma endregion 帧率显示
+
+
+
+
+			// 初始化一个用于中转的一维vector，这种形式的初始化不用释放,每次循环都要初始化一次，因为每次循环都要删除4个元素
+			std::vector<double> zernikeMatrix_recon_1d_add(144);  //因为会删掉四个元素，所以要给加减操作分别设置一个
+			std::vector<double> zernikeMatrix_recon_1d_minus(144);  //因为会删掉四个元素，所以要给加减操作分别设置一个
+			std::vector<double> zernikeMatrix_recon_1d_default(144);  // 默认操作
+
+
+			// 随机矩阵     (double)rand() / 32768.0 - 0.5   范围 -0.5 0.5
+			// 每次while循环中，随机矩阵保持不变
+			for (int index = 0; index < 140; ++index)
 			{
-				wavefront_vector[row][col] = wavefront[row][col];
+				randomMatrix[index] = ((double)rand() / 32768.0 - 0.5) * 50;
 			}
-		}
-
-		write_2d_File("D:\\externLib\\AOS\\Output\\StrokeWavefrontRecon.txt", wavefront_vector);
 
 
-		int a = 0;
+			// 一次while循环包括两次计算，第一次为加操作，第二次为减操作
+			// 通过遍历两次操作，获取评价函数值，用于下一步的判决
+			for (int count = 0; count < 2; ++count)
+			{
+
+#pragma region 加操作
+
+				if (count == 0)  // 减随机变量
+				{
+
+
+#pragma region 整理发送给变形镜
+
+					for (int index = 0; index < 140; ++index)
+					{
+						zernikeMatrix_recon_array_ADD[index] = zernikeMatrix_recon_array_DEFAULT[index] + randomMatrix[index];
+					}
+
+					//## 这里要有一个转换，将vector转换为数组
+					P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
+					aoSystemData->dDMDesired = zernikeMatrix_recon_array_ADD;
+					int status = P_DM_SetSpatialFrame();
+
+#pragma endregion 整理发送给变形镜
+
+
+#pragma region 变形镜等待时间
+
+					//新计时器开始
+					LARGE_INTEGER nStartCounter_dmwait;
+					LARGE_INTEGER nFrequency_dmwait;
+					double nTime_dmwait = 0; // 记录时间
+
+					::QueryPerformanceCounter(&nStartCounter_dmwait);
+					::QueryPerformanceFrequency(&nFrequency_dmwait);
+
+
+					do
+					{
+						LARGE_INTEGER nStopCounter_dmwait;
+						::QueryPerformanceCounter(&nStopCounter_dmwait);
+						nTime_dmwait = 1000 * ((double)nStopCounter_dmwait.QuadPart - (double)nStartCounter_dmwait.QuadPart) / (double)nFrequency_dmwait.QuadPart;    // 单位 ms
+					} while (nTime_dmwait < 10);
+
+
+#pragma endregion 变形镜等待时间
+
+
+
+
+#pragma region 波前探测
+					// 普通模式获取质心位置
+					WFS_TakeSpotfieldImage(instr.handle);
+					// 计算质心位置
+					WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
+
+
+#pragma region 显示子孔径图像
+
+					if (subApertureImageSwitch->GetCheck() == 1)
+					{
+
+						// 将图像刷入内存
+						WFS_GetSpotfieldImageCopy(instr.handle, imageBuf, row_image, col_image);
+						// 将图像由一维转为二维，下面的转换经过验证是正确的
+						for (int row = 0; row < 480; ++row)
+							for (int col = 0; col < 480; ++col)
+							{
+								image2DBuf[row][col] = imageBuf[480 * row + col];
+							}
+						//----------------------------------------------------------//
+						// 之前使用cvCreateImage配合cvReleaseImage使用，总是内存泄露
+						// 现在cvCreateImageHeader与cvReleaseImageHeader成对使用，解决了内存泄露
+						m_img = cvCreateImageHeader(cvSize(480, 480), 8, 1);
+						cvSetData(m_img, image2DBuf, 480); // 这一句申请了内存，应该是通过cvReleaseImageHeader释放的
+
+
+						// 用于在TAB控件上子孔径标签页上的对话框上的pic控件显示子孔径的实时图像
+						// ptr_SubApertureImageDlg是pW的成员
+						pW->ptr_SubApertureImageDlg->ShowSubApertuerImageFrame();
+
+						// 设置标志
+						if (CMOSImageFlag == FALSE)
+							CMOSImageFlag = TRUE;
+
+					}
+					else
+					{
+						if (CMOSImageFlag == TRUE)
+						{
+							pW->ptr_SubApertureImageDlg->ShowNoCMOSImage();
+						}
+						CMOSImageFlag = FALSE;  // 设置标志
+					}
+
+
+#pragma endregion 显示子孔径图像
+
+
+
+					// 计算脱靶量
+					WFS_CalcSpotToReferenceDeviations(instr.handle, instr_setup.cancel_tilt);
+					// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
+					WFS_GetSpotDeviations(instr.handle, *deviation_x, *deviation_y);
+
+
+#pragma region 复杂的无效数据处理办法
+
+					for (int row = 1; row < 28; ++row)  // 空出最上下两行
+					{
+						for (int col = 1; col < 28; ++col) // 空出最左右两列
+						{
+
+							// 判断x方向
+							if (_isnan(deviation_x[row][col]))
+							{
+								++NAN_counter;
+								// 排列方式
+								//  x x x
+								//  x o x
+								//  x x x
+
+								if (_isnan(deviation_x[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
+									_isnan(deviation_x[row - 1][col]) &&
+									_isnan(deviation_x[row - 1][col + 1]) &&
+									_isnan(deviation_x[row][col - 1]) &&
+									_isnan(deviation_x[row][col + 1]) &&
+									_isnan(deviation_x[row + 1][col - 1]) &&
+									_isnan(deviation_x[row + 1][col]) &&
+									_isnan(deviation_x[row + 1][col + 1]))
+								{
+									str_showerror = "警报：梯度算法  加操作  X方向脱靶量  过多无效数据！ 无效数据已置零！";
+									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+									deviation_x[row][col] = 0;
+								}
+								else
+								{
+									// 排列方式
+									//  x x x
+									//  x o x
+									//  x x x
+
+									int mean_counter = 0;  // 有效值个数
+									float mean_value = 0;  // 有效值的和
+
+									if (!_isnan(deviation_x[row - 1][col - 1]))  // 上左
+									{
+										mean_value = mean_value + deviation_x[row - 1][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row - 1][col])) // 上中
+									{
+										mean_value = mean_value + deviation_x[row - 1][col];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row - 1][col + 1])) // 上右
+									{
+										mean_value = mean_value + deviation_x[row - 1][col + 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row][col - 1])) // 中左
+									{
+										mean_value = mean_value + deviation_x[row][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row][col + 1])) // 中右
+									{
+										mean_value = mean_value + deviation_x[row][col + 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row + 1][col - 1])) // 下左
+									{
+										mean_value = mean_value + deviation_x[row + 1][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row + 1][col]))  // 下中
+									{
+										mean_value = mean_value + deviation_x[row + 1][col];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row + 1][col + 1]))  // 下右
+									{
+										mean_value = mean_value + deviation_x[row + 1][col + 1];
+										mean_counter++;
+									}
+
+									deviation_x[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
+
+									str_showerror = "警报：梯度算法  加操作  X方向脱靶量  无效数据已被插值";
+									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+								}
+
+
+							}  // x方向结束
+
+
+
+							// 判断y方向
+							if (_isnan(deviation_y[row][col]))
+							{
+								++NAN_counter;
+
+								// 排列方式
+								//  x x x
+								//  x o x
+								//  x x x
+
+								if (_isnan(deviation_y[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
+									_isnan(deviation_y[row - 1][col]) &&
+									_isnan(deviation_y[row - 1][col + 1]) &&
+									_isnan(deviation_y[row][col - 1]) &&
+									_isnan(deviation_y[row][col + 1]) &&
+									_isnan(deviation_y[row + 1][col - 1]) &&
+									_isnan(deviation_y[row + 1][col]) &&
+									_isnan(deviation_y[row + 1][col + 1]))
+								{
+									str_showerror = "警报：梯度算法  加操作  Y方向脱靶量  过多无效数据！ 无效数据已置零！";
+									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+									deviation_y[row][col] = 0;
+								} // 强制置零结束
+								else
+								{
+									// 排列方式
+									//  x x x
+									//  x o x
+									//  x x x
+
+									int mean_counter = 0;  // 有效值个数
+									float mean_value = 0;  // 有效值的和
+
+									if (!_isnan(deviation_y[row - 1][col - 1]))  // 上左
+									{
+										mean_value = mean_value + deviation_y[row - 1][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row - 1][col])) // 上中
+									{
+										mean_value = mean_value + deviation_y[row - 1][col];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row - 1][col + 1])) // 上右
+									{
+										mean_value = mean_value + deviation_y[row - 1][col + 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row][col - 1])) // 中左
+									{
+										mean_value = mean_value + deviation_y[row][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row][col + 1])) // 中右
+									{
+										mean_value = mean_value + deviation_y[row][col + 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row + 1][col - 1])) // 下左
+									{
+										mean_value = mean_value + deviation_y[row + 1][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row + 1][col]))  // 下中
+									{
+										mean_value = mean_value + deviation_y[row + 1][col];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row + 1][col + 1]))  // 下右
+									{
+										mean_value = mean_value + deviation_y[row + 1][col + 1];
+										mean_counter++;
+									}
+
+									deviation_y[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
+
+									str_showerror = "警报：梯度算法  加操作  Y方向脱靶量  无效数据已被插值";
+									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+								}  // 对中心无效值插值结束
+
+							} // y方向结束
+
+						}
+					}  // 无效值遍历结束
+
+#pragma endregion 复杂的无效数据处理办法
+
+
+					//
+					//#pragma region 简单处理无效数据的方法
+					//
+					//					NAN_counter = 0;
+					//					for (int row = 0; row < 29; ++row)
+					//					{
+					//						for (int col = 0; col < 29; ++col)
+					//						{
+					//							if (_isnan(deviation_x[row][col]))
+					//							{
+					//								++NAN_counter; // 计数器加一
+					//								FLAG_NAN = 1;  // 将标志位赋值为1，表示存在NAN数据
+					//								str_showerror = "警报：梯度算法  加操作  X脱靶量  中出现NAN数据！";
+					//								pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+					//
+					//								deviation_x[row][col] = 0;
+					//
+					//							}
+					//							if (_isnan(deviation_y[row][col]))
+					//							{
+					//								++NAN_counter; // 计数器加一
+					//								FLAG_NAN = 1;  // 将标志位赋值为1，表示存在NAN数据
+					//								str_showerror = "警报：梯度算法  加操作  Y脱靶量  中出现NAN数据！";
+					//								pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+					//
+					//
+					//								deviation_y[row][col] = 0;
+					//							}
+					//						}
+					//					}  // 无效值遍历结束
+					//
+					//#pragma endregion 简单处理无效数据的方法
+					//
+
+
+					// 显示无效点的个数
+					(pW->m_Edit_Sta_Watch).Format(_T("%d"), NAN_counter);
+					pW->SetDlgItemTextW(IDC_EDIT_STA_WATCH, pW->m_Edit_Sta_Watch);
+
+
+
+
+					//根据脱靶量重建波前,wavefront数组的单位是um
+					WFS_CalcWavefront(instr.handle, 0, instr_setup.pupil_circular, *wavefront);
+
+
+					// 在梯度算法中，使用直接积分法获得波前，但是不排除其中有无效值，如果出现无效值会导致根据波前信息计算的评价函数也会是无效值
+					// 因此，在这里，对于无效值要做置零处理
+					for (int row = 0; row < 29; ++row) // 因为不需要插值，因此这里的遍历范围是全部的子孔径
+					{
+						for (int col = 0; col < 29; ++col)
+						{
+							if (_isnan(wavefront[row][col]))
+							{
+								wavefront[row][col] = 0;
+							}
+						}
+					} // 无效值遍历结束
+
+
+
+					// 波前统计信息
+					WFS_CalcWavefrontStatistics(instr.handle, &wavefront_min_add, &wavefront_max_add,
+						&wavefront_diff_add, &wavefront_mean_add, &wavefront_rms_add, &wavefront_weighted_rms_add);
+
+
+#pragma endregion 波前探测
+
+
+#pragma region 计算评价函数
+
+					double meritTemp = 0;
+					for (int row = 0; row < 29; ++row)
+					{
+						for (int col = 0; col < 29; ++col)
+						{
+
+							deviation_x_pupil[row][col] = deviation_x[row][col] * pupil_deviation[row][col];
+							deviation_y_pupil[row][col] = deviation_y[row][col] * pupil_deviation[row][col];
+
+							if (_isnan(deviation_x_pupil[row][col]))
+							{
+								deviation_x_pupil[row][col] = 0;
+							}
+							if (_isnan(deviation_y_pupil[row][col]))
+							{
+								deviation_y_pupil[row][col] = 0;
+							}
+
+							meritTemp = meritTemp + pow(deviation_x_pupil[row][col], 2) + pow(deviation_y_pupil[row][col], 2);
+
+						}
+					}
+					meritFunctionValueAdd = sqrt(meritTemp);
+
+
+#pragma endregion 计算评价函数
+
+				}//if结束  加操作结束
+
+#pragma endregion 加操作
+
+
+#pragma region 减操作
+
+
+				if (count == 1)
+				{
+
+#pragma region 整理发送给变形镜
+
+
+					for (int index = 0; index < 140; ++index)
+					{
+						zernikeMatrix_recon_array_MINUS[index] = zernikeMatrix_recon_array_DEFAULT[index] - randomMatrix[index];
+					}
+
+
+
+					//## 这里要有一个转换，将vector转换为数组
+					P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
+					aoSystemData->dDMDesired = zernikeMatrix_recon_array_MINUS;
+					int status = P_DM_SetSpatialFrame();
+
+#pragma endregion 整理发送给变形镜
+
+
+#pragma region 变形镜等待时间
+
+					//新计时器开始
+					LARGE_INTEGER nStartCounter_dmwait;
+					LARGE_INTEGER nFrequency_dmwait;
+					double nTime_dmwait = 0; // 记录时间
+
+					::QueryPerformanceCounter(&nStartCounter_dmwait);
+					::QueryPerformanceFrequency(&nFrequency_dmwait);
+
+
+					do
+					{
+						LARGE_INTEGER nStopCounter_dmwait;
+						::QueryPerformanceCounter(&nStopCounter_dmwait);
+						nTime_dmwait = 1000 * ((double)nStopCounter_dmwait.QuadPart - (double)nStartCounter_dmwait.QuadPart) / (double)nFrequency_dmwait.QuadPart;    // 单位 ms
+					} while (nTime_dmwait < 10);
+
+
+#pragma endregion 变形镜等待时间
+
+
+#pragma region 波前探测
+					// 普通模式获取质心位置
+					WFS_TakeSpotfieldImage(instr.handle);
+					// 计算质心位置
+					WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
+
+					// 计算脱靶量
+					WFS_CalcSpotToReferenceDeviations(instr.handle, instr_setup.cancel_tilt);
+					// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
+					WFS_GetSpotDeviations(instr.handle, *deviation_x, *deviation_y);
+
+
+
+
+
+#pragma region 复杂的无效数据处理办法
+
+					for (int row = 1; row < 28; ++row)  // 空出最上下两行
+					{
+						for (int col = 1; col < 28; ++col) // 空出最左右两列
+						{
+
+							// 判断x方向
+							if (_isnan(deviation_x[row][col]))
+							{
+								++NAN_counter;
+								// 排列方式
+								//  x x x
+								//  x o x
+								//  x x x
+
+								if (_isnan(deviation_x[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
+									_isnan(deviation_x[row - 1][col]) &&
+									_isnan(deviation_x[row - 1][col + 1]) &&
+									_isnan(deviation_x[row][col - 1]) &&
+									_isnan(deviation_x[row][col + 1]) &&
+									_isnan(deviation_x[row + 1][col - 1]) &&
+									_isnan(deviation_x[row + 1][col]) &&
+									_isnan(deviation_x[row + 1][col + 1]))
+								{
+									str_showerror = "警报：梯度算法  减操作  X方向脱靶量  过多无效数据！ 无效数据已置零！";
+									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+									deviation_x[row][col] = 0;
+								}
+								else
+								{
+									// 排列方式
+									//  x x x
+									//  x o x
+									//  x x x
+
+									int mean_counter = 0;  // 有效值个数
+									float mean_value = 0;  // 有效值的和
+
+									if (!_isnan(deviation_x[row - 1][col - 1]))  // 上左
+									{
+										mean_value = mean_value + deviation_x[row - 1][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row - 1][col])) // 上中
+									{
+										mean_value = mean_value + deviation_x[row - 1][col];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row - 1][col + 1])) // 上右
+									{
+										mean_value = mean_value + deviation_x[row - 1][col + 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row][col - 1])) // 中左
+									{
+										mean_value = mean_value + deviation_x[row][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row][col + 1])) // 中右
+									{
+										mean_value = mean_value + deviation_x[row][col + 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row + 1][col - 1])) // 下左
+									{
+										mean_value = mean_value + deviation_x[row + 1][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row + 1][col]))  // 下中
+									{
+										mean_value = mean_value + deviation_x[row + 1][col];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_x[row + 1][col + 1]))  // 下右
+									{
+										mean_value = mean_value + deviation_x[row + 1][col + 1];
+										mean_counter++;
+									}
+
+									deviation_x[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
+
+									str_showerror = "警报：梯度算法  减操作  X方向脱靶量  无效数据已被插值";
+									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+								}
+
+
+							}  // x方向结束
+
+
+
+							// 判断y方向
+							if (_isnan(deviation_y[row][col]))
+							{
+								++NAN_counter;
+
+								// 排列方式
+								//  x x x
+								//  x o x
+								//  x x x
+
+								if (_isnan(deviation_y[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
+									_isnan(deviation_y[row - 1][col]) &&
+									_isnan(deviation_y[row - 1][col + 1]) &&
+									_isnan(deviation_y[row][col - 1]) &&
+									_isnan(deviation_y[row][col + 1]) &&
+									_isnan(deviation_y[row + 1][col - 1]) &&
+									_isnan(deviation_y[row + 1][col]) &&
+									_isnan(deviation_y[row + 1][col + 1]))
+								{
+									str_showerror = "警报：梯度算法  减操作  Y方向脱靶量  过多无效数据！ 无效数据已置零！";
+									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+									deviation_y[row][col] = 0;
+								} // 强制置零结束
+								else
+								{
+									// 排列方式
+									//  x x x
+									//  x o x
+									//  x x x
+
+									int mean_counter = 0;  // 有效值个数
+									float mean_value = 0;  // 有效值的和
+
+									if (!_isnan(deviation_y[row - 1][col - 1]))  // 上左
+									{
+										mean_value = mean_value + deviation_y[row - 1][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row - 1][col])) // 上中
+									{
+										mean_value = mean_value + deviation_y[row - 1][col];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row - 1][col + 1])) // 上右
+									{
+										mean_value = mean_value + deviation_y[row - 1][col + 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row][col - 1])) // 中左
+									{
+										mean_value = mean_value + deviation_y[row][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row][col + 1])) // 中右
+									{
+										mean_value = mean_value + deviation_y[row][col + 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row + 1][col - 1])) // 下左
+									{
+										mean_value = mean_value + deviation_y[row + 1][col - 1];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row + 1][col]))  // 下中
+									{
+										mean_value = mean_value + deviation_y[row + 1][col];
+										mean_counter++;
+									}
+									if (!_isnan(deviation_y[row + 1][col + 1]))  // 下右
+									{
+										mean_value = mean_value + deviation_y[row + 1][col + 1];
+										mean_counter++;
+									}
+
+									deviation_y[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
+
+									str_showerror = "警报：梯度算法  减操作  Y方向脱靶量  无效数据已被插值";
+									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+
+								}  // 对中心无效值插值结束
+
+							} // y方向结束
+
+						}
+					}  // 无效值遍历结束
+
+#pragma endregion 复杂的无效数据处理办法
+
+
+					//
+					//#pragma region 简单处理无效数据的方法
+					//
+					//					NAN_counter = 0;
+					//					for (int row = 0; row < 29; ++row)
+					//					{
+					//						for (int col = 0; col < 29; ++col)
+					//						{
+					//							if (_isnan(deviation_x[row][col]))
+					//							{
+					//								++NAN_counter; // 计数器加一
+					//								FLAG_NAN = 1;  // 将标志位赋值为1，表示存在NAN数据
+					//								str_showerror = "警报：梯度算法  减操作  X脱靶量  中出现NAN数据！";
+					//								pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+					//
+					//								deviation_x[row][col] = 0;
+					//
+					//							}
+					//							if (_isnan(deviation_y[row][col]))
+					//							{
+					//								++NAN_counter; // 计数器加一
+					//								FLAG_NAN = 1;  // 将标志位赋值为1，表示存在NAN数据
+					//								str_showerror = "警报：梯度算法  减操作  Y脱靶量  中出现NAN数据！";
+					//								pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+					//
+					//
+					//								deviation_y[row][col] = 0;
+					//							}
+					//						}
+					//					}  // 无效值遍历结束
+					//
+					//#pragma endregion 简单处理无效数据的方法
+					//
+
+
+					// 显示无效点的个数
+					(pW->m_Edit_Sta_Watch).Format(_T("%d"), NAN_counter);
+					pW->SetDlgItemTextW(IDC_EDIT_STA_WATCH, pW->m_Edit_Sta_Watch);
+
+
+
+
+
+					//根据脱靶量重建波前,wavefront数组的单位是um
+					WFS_CalcWavefront(instr.handle, 0, instr_setup.pupil_circular, *wavefront);
+
+
+					// 在梯度算法中，使用直接积分法获得波前，但是不排除其中有无效值，如果出现无效值会导致根据波前信息计算的评价函数也会是无效值
+					// 因此，在这里，对于无效值要做置零处理
+					for (int row = 0; row < 29; ++row) // 因为不需要插值，因此这里的遍历范围是全部的子孔径
+					{
+						for (int col = 0; col < 29; ++col)
+						{
+							if (_isnan(wavefront[row][col]))
+							{
+								wavefront[row][col] = 0;
+							}
+						}
+					} // 无效值遍历结束
+
+
+					// 减操作的波前统计信息
+					WFS_CalcWavefrontStatistics(instr.handle, &wavefront_min_minus, &wavefront_max_minus,
+						&wavefront_diff_minus, &wavefront_mean_minus, &wavefront_rms_minus, &wavefront_weighted_rms_minus);
+
+#pragma endregion 波前探测
+
+
+#pragma region 计算评价函数
+
+					double meritTemp = 0;
+					for (int row = 0; row < 29; ++row)
+					{
+						for (int col = 0; col < 29; ++col)
+						{
+
+							deviation_x_pupil[row][col] = deviation_x[row][col] * pupil_deviation[row][col];
+							deviation_y_pupil[row][col] = deviation_y[row][col] * pupil_deviation[row][col];
+
+							if (_isnan(deviation_x_pupil[row][col]))
+							{
+								deviation_x_pupil[row][col] = 0;
+							}
+							if (_isnan(deviation_y_pupil[row][col]))
+							{
+								deviation_y_pupil[row][col] = 0;
+							}
+
+							meritTemp = meritTemp + pow(deviation_x_pupil[row][col], 2) + pow(deviation_y_pupil[row][col], 2);
+
+						}
+					}
+					meritFunctionValueMinus = sqrt(meritTemp);
+
+#pragma endregion 计算评价函数
+
+
+				}//if结束 减操作结束
+
+#pragma endregion 减操作
+
+
+				//
+				//#pragma region 默认操作
+				//				if (count == 2)
+				//				{
+				//
+				//
+				//
+				//#pragma region 整理发送给变形镜
+				//
+				//
+				//					//## 这里要有一个转换，将vector转换为数组
+				//					P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
+				//					aoSystemData->dDMDesired = zernikeMatrix_recon_array_DEFAULT;
+				//					int status = P_DM_SetSpatialFrame();
+				//
+				//#pragma endregion 整理发送给变形镜
+				//
+				//
+				//#pragma region 变形镜等待时间
+				//
+				//					//新计时器开始
+				//					LARGE_INTEGER nStartCounter_dmwait;
+				//					LARGE_INTEGER nFrequency_dmwait;
+				//					double nTime_dmwait = 0; // 记录时间
+				//
+				//					::QueryPerformanceCounter(&nStartCounter_dmwait);
+				//					::QueryPerformanceFrequency(&nFrequency_dmwait);
+				//
+				//
+				//					do
+				//					{
+				//						LARGE_INTEGER nStopCounter_dmwait;
+				//						::QueryPerformanceCounter(&nStopCounter_dmwait);
+				//						nTime_dmwait = 1000 * ((double)nStopCounter_dmwait.QuadPart - (double)nStartCounter_dmwait.QuadPart) / (double)nFrequency_dmwait.QuadPart;    // 单位 ms
+				//					} while (nTime_dmwait < 10);
+				//
+				//
+				//#pragma endregion 变形镜等待时间
+				//
+				//
+				//#pragma region 波前探测
+				//					// 普通模式获取质心位置
+				//					WFS_TakeSpotfieldImage(instr.handle);
+				//					// 计算质心位置
+				//					WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
+				//
+				//					// 计算脱靶量
+				//					WFS_CalcSpotToReferenceDeviations(instr.handle, instr_setup.cancel_tilt);
+				//					// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
+				//					WFS_GetSpotDeviations(instr.handle, *deviation_x, *deviation_y);
+				//
+				//
+				//#pragma region 复杂的无效数据处理办法
+				//
+				//					NAN_counter = 0;
+				//					for (int row = 1; row < 28; ++row)  // 空出最上下两行
+				//					{
+				//						for (int col = 1; col < 28; ++col) // 空出最左右两列
+				//						{
+				//
+				//							// 判断x方向
+				//							if (_isnan(deviation_x[row][col]))
+				//							{
+				//								++NAN_counter;
+				//								// 排列方式
+				//								//  x x x
+				//								//  x o x
+				//								//  x x x
+				//
+				//								if (_isnan(deviation_x[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
+				//									_isnan(deviation_x[row - 1][col]) &&
+				//									_isnan(deviation_x[row - 1][col + 1]) &&
+				//									_isnan(deviation_x[row][col - 1]) &&
+				//									_isnan(deviation_x[row][col + 1]) &&
+				//									_isnan(deviation_x[row + 1][col - 1]) &&
+				//									_isnan(deviation_x[row + 1][col]) &&
+				//									_isnan(deviation_x[row + 1][col + 1]))
+				//								{
+				//									str_showerror = "警报：梯度算法  默认操作  X方向脱靶量  过多无效数据！ 无效数据已置零！";
+				//									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+				//
+				//									deviation_x[row][col] = 0;
+				//								}
+				//								else
+				//								{
+				//									// 排列方式
+				//									//  x x x
+				//									//  x o x
+				//									//  x x x
+				//
+				//									int mean_counter = 0;  // 有效值个数
+				//									float mean_value = 0;  // 有效值的和
+				//
+				//									if (!_isnan(deviation_x[row - 1][col - 1]))  // 上左
+				//									{
+				//										mean_value = mean_value + deviation_x[row - 1][col - 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_x[row - 1][col])) // 上中
+				//									{
+				//										mean_value = mean_value + deviation_x[row - 1][col];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_x[row - 1][col + 1])) // 上右
+				//									{
+				//										mean_value = mean_value + deviation_x[row - 1][col + 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_x[row][col - 1])) // 中左
+				//									{
+				//										mean_value = mean_value + deviation_x[row][col - 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_x[row][col + 1])) // 中右
+				//									{
+				//										mean_value = mean_value + deviation_x[row][col + 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_x[row + 1][col - 1])) // 下左
+				//									{
+				//										mean_value = mean_value + deviation_x[row + 1][col - 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_x[row + 1][col]))  // 下中
+				//									{
+				//										mean_value = mean_value + deviation_x[row + 1][col];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_x[row + 1][col + 1]))  // 下右
+				//									{
+				//										mean_value = mean_value + deviation_x[row + 1][col + 1];
+				//										mean_counter++;
+				//									}
+				//
+				//									deviation_x[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
+				//
+				//									str_showerror = "警报：梯度算法  默认操作  X方向脱靶量  无效数据已被插值";
+				//									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+				//
+				//								}
+				//
+				//
+				//							}  // x方向结束
+				//
+				//
+				//
+				//							// 判断y方向
+				//							if (_isnan(deviation_y[row][col]))
+				//							{
+				//								++NAN_counter;
+				//
+				//								// 排列方式
+				//								//  x x x
+				//								//  x o x
+				//								//  x x x
+				//
+				//								if (_isnan(deviation_y[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
+				//									_isnan(deviation_y[row - 1][col]) &&
+				//									_isnan(deviation_y[row - 1][col + 1]) &&
+				//									_isnan(deviation_y[row][col - 1]) &&
+				//									_isnan(deviation_y[row][col + 1]) &&
+				//									_isnan(deviation_y[row + 1][col - 1]) &&
+				//									_isnan(deviation_y[row + 1][col]) &&
+				//									_isnan(deviation_y[row + 1][col + 1]))
+				//								{
+				//									str_showerror = "警报：梯度算法  默认操作  Y方向脱靶量  过多无效数据！ 无效数据已置零！";
+				//									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+				//
+				//									deviation_y[row][col] = 0;
+				//								} // 强制置零结束
+				//								else
+				//								{
+				//									// 排列方式
+				//									//  x x x
+				//									//  x o x
+				//									//  x x x
+				//
+				//									int mean_counter = 0;  // 有效值个数
+				//									float mean_value = 0;  // 有效值的和
+				//
+				//									if (!_isnan(deviation_y[row - 1][col - 1]))  // 上左
+				//									{
+				//										mean_value = mean_value + deviation_y[row - 1][col - 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_y[row - 1][col])) // 上中
+				//									{
+				//										mean_value = mean_value + deviation_y[row - 1][col];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_y[row - 1][col + 1])) // 上右
+				//									{
+				//										mean_value = mean_value + deviation_y[row - 1][col + 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_y[row][col - 1])) // 中左
+				//									{
+				//										mean_value = mean_value + deviation_y[row][col - 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_y[row][col + 1])) // 中右
+				//									{
+				//										mean_value = mean_value + deviation_y[row][col + 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_y[row + 1][col - 1])) // 下左
+				//									{
+				//										mean_value = mean_value + deviation_y[row + 1][col - 1];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_y[row + 1][col]))  // 下中
+				//									{
+				//										mean_value = mean_value + deviation_y[row + 1][col];
+				//										mean_counter++;
+				//									}
+				//									if (!_isnan(deviation_y[row + 1][col + 1]))  // 下右
+				//									{
+				//										mean_value = mean_value + deviation_y[row + 1][col + 1];
+				//										mean_counter++;
+				//									}
+				//
+				//									deviation_y[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
+				//
+				//									str_showerror = "警报：梯度算法  默认操作  Y方向脱靶量  无效数据已被插值";
+				//									pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+				//
+				//								}  // 对中心无效值插值结束
+				//
+				//							} // y方向结束
+				//
+				//						}
+				//					}  // 无效值遍历结束
+				//
+				//#pragma endregion 复杂的无效数据处理办法
+				//
+				//					//
+				//					//#pragma region 简单处理无效数据的方法
+				//					//
+				//					//					NAN_counter = 0;
+				//					//					for (int row = 0; row < 29; ++row)
+				//					//					{
+				//					//						for (int col = 0; col < 29; ++col)
+				//					//						{
+				//					//							if (_isnan(deviation_x[row][col]))
+				//					//							{
+				//					//								++NAN_counter; // 计数器加一
+				//					//								FLAG_NAN = 1;  // 将标志位赋值为1，表示存在NAN数据
+				//					//								str_showerror = "警报：梯度算法  默认操作  X脱靶量  中出现NAN数据！";
+				//					//								pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+				//					//
+				//					//								deviation_x[row][col] = 0;
+				//					//
+				//					//							}
+				//					//							if (_isnan(deviation_y[row][col]))
+				//					//							{
+				//					//								++NAN_counter; // 计数器加一
+				//					//								FLAG_NAN = 1;  // 将标志位赋值为1，表示存在NAN数据
+				//					//								str_showerror = "警报：梯度算法  默认操作  Y脱靶量  中出现NAN数据！";
+				//					//								pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
+				//					//
+				//					//
+				//					//								deviation_y[row][col] = 0;
+				//					//							}
+				//					//						}
+				//					//					}  // 无效值遍历结束
+				//					//
+				//					//#pragma endregion 简单处理无效数据的方法
+				//					//
+				//
+				//
+				//					// 显示无效点的个数
+				//					(pW->m_Edit_Sta_Watch).Format(_T("%d"), NAN_counter);
+				//					pW->SetDlgItemTextW(IDC_EDIT_STA_WATCH, pW->m_Edit_Sta_Watch);
+				//
+				//
+				//
+				//
+				//
+				//
+				//					//根据脱靶量重建波前,wavefront数组的单位是um
+				//					WFS_CalcWavefront(instr.handle, 0, instr_setup.pupil_circular, *wavefront);
+				//
+				//
+				//					// 在梯度算法中，使用直接积分法获得波前，但是不排除其中有无效值，如果出现无效值会导致根据波前信息计算的评价函数也会是无效值
+				//					// 因此，在这里，对于无效值要做置零处理
+				//					for (int row = 0; row < 29; ++row) // 因为不需要插值，因此这里的遍历范围是全部的子孔径
+				//					{
+				//						for (int col = 0; col < 29; ++col)
+				//						{
+				//							if (_isnan(wavefront[row][col]))
+				//							{
+				//								wavefront[row][col] = 0;
+				//							}
+				//						}
+				//					} // 无效值遍历结束
+				//
+				//
+				//
+				//					// 减操作的波前统计信息
+				//					WFS_CalcWavefrontStatistics(instr.handle, &wavefront_min, &wavefront_max,
+				//						&wavefront_diff, &wavefront_mean, &wavefront_rms, &wavefront_weighted_rms);
+				//
+				//#pragma endregion 波前探测
+				//
+				//
+				//#pragma region 计算评价函数
+				//
+				//
+				//					double meritTemp = 0;
+				//					for (int row = 0; row < 29; ++row)
+				//					{
+				//						for (int col = 0; col < 29; ++col)
+				//						{
+				//							deviation_x_pupil[row][col] = deviation_x[row][col] * pupil_deviation[row][col];
+				//							deviation_y_pupil[row][col] = deviation_y[row][col] * pupil_deviation[row][col];
+				//
+				//							meritTemp = meritTemp + pow(deviation_x_pupil[row][col], 2) + pow(deviation_y_pupil[row][col], 2);
+				//
+				//						}
+				//					}
+				//					meritFunctionValue = sqrt(meritTemp);
+				//
+				//
+				//#pragma endregion 计算评价函数
+				//
+				//
+				//				}
+				//
+				//
+				//
+				//
+				//
+				//
+				//#pragma endregion 默认操作
+				//
+
+
+			}//for结束
+
+
+#pragma region 判决显示部分
+
+			// 判断部分，选择最终向哪个方向进化，从而确定下一次while循环的起始执行量值
+			// 做一些显示任务
+			if (meritFunctionValueAdd < (meritFunctionValue))
+			{
+				meritFunctionValue = meritFunctionValueAdd;
+
+				// 将加操作的执行量作为下次循环的初始值
+				for (int index = 0; index < 140; ++index)
+				{
+					zernikeMatrix_recon_array_DEFAULT[index] = zernikeMatrix_recon_array_ADD[index];
+				}
+
+			}
+			else if (meritFunctionValueMinus < (meritFunctionValue))
+			{
+
+				meritFunctionValue = meritFunctionValueMinus;
+				// 将减操作的执行量作为下次循环的初始值
+				for (int index = 0; index < 140; ++index)
+				{
+					zernikeMatrix_recon_array_DEFAULT[index] = zernikeMatrix_recon_array_MINUS[index];
+				}
+
+			}
+
+
+#pragma endregion 判决显示部分
+
+
+			// 显示减操作的评价函数值
+			(pW->m_Edit_ShowMerit).Format(_T("%lf"), meritFunctionValue);
+			pW->SetDlgItemTextW(IDC_EDIT_SHOWMERIT, pW->m_Edit_ShowMerit);
+			// 显示减操作的波前统计信息
+			(pW->m_Edit_Sta_PV).Format(_T("%lf"), wavefront_diff_minus);
+			pW->SetDlgItemTextW(IDC_EDIT_STA_PV, pW->m_Edit_Sta_PV);
+			(pW->m_Edit_Sta_RMS).Format(_T("%lf"), wavefront_rms_minus);
+			pW->SetDlgItemTextW(IDC_EDIT_STA_RMS, pW->m_Edit_Sta_RMS);
+
+
+			// 选择是否显示执行量(梯度算法)
+			float temp;
+			if (showExecuDist->GetCheck() == 1)
+			{
+
+				for (int k_index = 1; k_index < 11; ++k_index)
+				{
+					temp = zernikeMatrix_recon_array_DEFAULT[k_index - 1];
+					(pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]).Format(_T("%lf"), temp);
+					pW->ptr_DeformMirrorDlg->SetDlgItemTextW(IDC_EDIT_DM_M001 + k_index, pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]);
+
+				}
+				for (int k_index = 12; k_index < 132; ++k_index)
+				{
+					temp = zernikeMatrix_recon_array_DEFAULT[k_index - 2];
+					(pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]).Format(_T("%lf"), temp);
+					pW->ptr_DeformMirrorDlg->SetDlgItemTextW(IDC_EDIT_DM_M001 + k_index, pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]);
+
+				}
+				for (int k_index = 133; k_index < 143; ++k_index)
+				{
+					temp = zernikeMatrix_recon_array_DEFAULT[k_index - 3];
+					(pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]).Format(_T("%lf"), temp);
+					pW->ptr_DeformMirrorDlg->SetDlgItemTextW(IDC_EDIT_DM_M001 + k_index, pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]);
+
+				}
+			}
+
+
+
+
+#pragma region 新增计时器开始
+			//新计时器开始
+			LARGE_INTEGER nStartCounter_wait;
+			LARGE_INTEGER nFrequency_wait;
+			double nTime_wait = 0; // 记录时间
+
+			::QueryPerformanceCounter(&nStartCounter_wait);
+			::QueryPerformanceFrequency(&nFrequency_wait);
+#pragma endregion 新增计时器开始
+
+
+			if (pW->ptr_MiscSettingDlg->m_Check_SubDlg_TimeSetter.GetCheck() == 1)  // 选择是否进行计时
+			{
+
+				do
+				{
+
+#pragma region 新增计时器结束
+
+					LARGE_INTEGER nStopCounter_wait;
+					::QueryPerformanceCounter(&nStopCounter_wait);
+					nTime_wait = 1000 * ((double)nStopCounter_wait.QuadPart - (double)nStartCounter_wait.QuadPart) / (double)nFrequency_wait.QuadPart;    // 单位 ms
+
+					//显示计时器
+					pW->m_Edit_Show_NewTimer.Format(_T("%lf"), nTime_wait);
+					pW->SetDlgItemText(IDC_EDIT_SHOW_NEWTIMER, pW->m_Edit_Show_NewTimer);
+
+#pragma endregion 新增计时器结束
+
+				} while (nTime_wait < timerSetterInterval);
+
+
+
+			}
+			else
+			{
+				// 没有定时，不执行
+			}
+
+
+
+
+#pragma region 计时器结束
+
+			LARGE_INTEGER nStopCounter_test;
+			::QueryPerformanceCounter(&nStopCounter_test);
+			nTime_test = 1000 * ((double)nStopCounter_test.QuadPart - (double)nStartCounter_test.QuadPart) / (double)nFrequency_test.QuadPart;    // 单位 ms
+
+			//显示计时器
+			pW->m_Edit_Sta_Time.Format(_T("%lf"), nTime_test);
+			pW->SetDlgItemText(IDC_EDIT_STA_TIME, pW->m_Edit_Sta_Time);
+
+#pragma endregion 计时器结束
+
+
+#pragma region 帧率显示
+
+			//-----------------------------------------//
+			// 帧率---终止部分
+			::QueryPerformanceCounter(&nStopCounter_2nd);
+			// 时间间隔，单位s
+			t_interval_2nd = (double)(nStopCounter_2nd.QuadPart - nStartCounter_2nd.QuadPart) / (double)nFrequency_2nd.QuadPart;
+			frameRate = (double)1 / t_interval_2nd;  // WFS的刷新频率，也是闭环的频率，单位Hz
+			pW->m_Edit_Sta_Frame.Format(_T("%lf"), frameRate);
+			pW->SetDlgItemText(IDC_EDIT_STA_FRAME, pW->m_Edit_Sta_Frame);
+			//-----------------------------------------//
+
+#pragma endregion 帧率显示
+
+
+		}  // while循环结束
+
+
 
 	}  // if结束，梯度算法结束
 
 #pragma endregion 梯度算法
 
 
-
+	//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 
 #pragma region 直接斜率
@@ -1509,293 +4517,85 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 	if (chooseAlgoIndex == 2)
 	{
 
-		// 载入预处理数据
-		lsqA = inputMatrix("D:\\externLib\\AOS\\Output\\PreCalc\\out\\lsqA.txt");
-		eff_picked = inputMatrix("D:\\externLib\\AOS\\Output\\PreCalc\\out\\eff_picked.txt");
+#pragma region 载入预处理数据
+		
+		// 注意，不需要压栈，也就不需要弹出栈
 
+
+		// 将Matlab计算好的lsqA与eff_picked读入
+		// 例如，有效子孔径点个数为609,那么，lsqA的维数就应该是140*610
+		lsqA = inputMatrix("D:\\externLib\\AOS\\Output\\PreCalc\\out\\lsqA.txt");
+		// 由于eff_picked要作为索引项，因此要将其转换为const int类型
+		// 例如，有效子孔径点个数为609，eff_picked当时初始化为841*2的矩阵，第610个为[0,0]，611起到后面都是未定义的值，在这之前是有效子孔径的位置信息
+		eff_picked = inputMatrix("D:\\externLib\\AOS\\Output\\PreCalc\\out\\eff_picked.txt");
+		// 注意eff_picked.size()表示行数，eff_picked[0].size()表示列数
+		// 例如eff_picked有609个子孔径点的索引号，那么就是609x2的一个矩阵，那么eff_picked.size()=609，eff_picked[0].size()=2
+
+		//// eff_picked做索引号举例如下：
+		//// MyMat_double类型的数据做索引
+		//lsqA[eff_picked[2][0]][eff_picked[2][1]];
+		//// vector<vector<double>>类型的数据做索引和上面是一样的
+		//zernikeMatrix_15[eff_picked[2][0]][eff_picked[2][1]];
+		//// float(POD)类型数据就要强转了！
+		//wavefront[(int)eff_picked[2][0]][(int)eff_picked[2][1]];
+
+#pragma endregion 载入预处理数据
 
 
 #pragma region 线程中的局部变量
 
 		// 几个指向对话框的指针
 		CAOSys_v8Dlg* pW = (CAOSys_v8Dlg*)pParam;
-		// 几个开关,checkbox用作开关
-		CButton* subApertureImageSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_PICSWITCH));
-		CButton* showExecuDist = (CButton*)(pW->GetDlgItem(IDC_CHECK_SHOW_EXECDIST));
 
-		// 与绘图有关的变量,480的分辨率
+		// 与绘图有关的变量
 		uchar image2DBuf[480][480];  // 二维形式
 
-		// 畸变波前有效子孔径的脱靶量组成的一维向量
+
+		// 几个开关,checkbox用作开关
+		CButton* subApertureImageSwitch = (CButton*)(pW->GetDlgItem(IDC_CHECK_PICSWITCH));
+		CButton* wavefrontSwich = (CButton*)(pW->GetDlgItem(IDC_CHECK_WAVEFRONTSWITCH));
+
 		std::vector<double> lsqy;  // lsqx=lsqA*lsqy
-		lsqy.resize(lsqA[0].size());
+		lsqy.resize(610);  // 给容器分配内存空间
 		int row_effsub;  // 有效点的行索引号
 		int col_effsub;  // 有效点的列索引号
 
-		// 波前统计参数局部变量
-		double wavefront_min_ACEMETHOD;
-		double wavefront_max_ACEMETHOD;
-		double wavefront_diff_ACEMETHOD;
-		double wavefront_mean_ACEMETHOD;
-		double wavefront_rms_ACEMETHOD;
-		double wavefront_weighted_rms_ACEMETHOD;
-
-		double zernikeMatrix_recon_array_ACEMETHOD[144];   // 保存最小二乘法计算的执行量  
-
-		double sum_temp = 0;
-
-		// 直接积分法重建波前
-		float  wavefront_DI[40][50];
-
-
-		// 脱靶量局部变量
-		float	deviation_x_DI[40][50];
-		float   deviation_y_DI[40][50];
+		double zernikeMatrix_recon_array_ACEMETHOD[140];   // 保存最小二乘法计算的执行量
 
 
 #pragma endregion 线程中的局部变量
 
 
+
+
 		// 闭环
 		CloseLoopFlag = TRUE;
-		int recordwave_counter = 0;
 		while (CloseLoopFlag)
 		{
 
+#pragma region 计算质心位置
+
+			// 第一步：计算质心位置
 			// 普通模式获取质心位置
 			WFS_TakeSpotfieldImage(instr.handle);
 			// 计算质心位置
 			WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
-			// 计算脱靶量
-			WFS_CalcSpotToReferenceDeviations(instr.handle, instr_setup.cancel_tilt);
-			// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
-			WFS_GetSpotDeviations(instr.handle, *deviation_x_DI, *deviation_y_DI);
-
-
-
-#pragma region 去除脱靶量中的无效值
-
-			// 脱靶量为29x29，边界采用置零
-
-			deviation_x_DI[0][0] = 0; deviation_x_DI[0][28] = 0; deviation_x_DI[28][0] = 0; deviation_x_DI[28][28] = 0;  // 四个角置零
-			deviation_y_DI[0][0] = 0; deviation_y_DI[0][28] = 0; deviation_y_DI[28][0] = 0; deviation_y_DI[28][28] = 0;  // 四个角置零
-
-			// 最外面四条边置零
-			for (int col = 1; col < 28; ++col)  // 第0行
-			{
-				deviation_x_DI[0][col] = 0;
-				deviation_y_DI[0][col] = 0;
-			}
-			for (int col = 1; col < 28; ++col)  // 第28行
-			{
-				deviation_x_DI[28][col] = 0;
-				deviation_y_DI[28][col] = 0;
-			}
-			for (int row = 1; row < 28; ++row)  // 第0列
-			{
-				deviation_x_DI[row][0] = 0;
-				deviation_y_DI[row][0] = 0;
-			}
-			for (int row = 1; row < 28; ++row)  // 第28列
-			{
-				deviation_x_DI[row][28] = 0;
-				deviation_y_DI[row][28] = 0;
-			}
-
-
-			// 对中间的数据进行平均插值
-			for (int row = 1; row < 28; ++row)  // 空出最上下两行
-			{
-				for (int col = 1; col < 28; ++col) // 空出最左右两列
-				{
-
-					// 判断x方向
-					if (_isnan(deviation_x_DI[row][col]))
-					{
-						// 排列方式
-						//  x x x
-						//  x o x
-						//  x x x
-
-						if (_isnan(deviation_x_DI[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
-							_isnan(deviation_x_DI[row - 1][col]) &&
-							_isnan(deviation_x_DI[row - 1][col + 1]) &&
-							_isnan(deviation_x_DI[row][col - 1]) &&
-							_isnan(deviation_x_DI[row][col + 1]) &&
-							_isnan(deviation_x_DI[row + 1][col - 1]) &&
-							_isnan(deviation_x_DI[row + 1][col]) &&
-							_isnan(deviation_x_DI[row + 1][col + 1]))
-						{
-							deviation_x_DI[row][col] = 0;
-						}
-						else
-						{
-							// 排列方式
-							//  x x x
-							//  x o x
-							//  x x x
-
-							int mean_counter = 0;  // 有效值个数
-							float mean_value = 0;  // 有效值的和
-
-							if (!_isnan(deviation_x_DI[row - 1][col - 1]))  // 上左
-							{
-								mean_value = mean_value + deviation_x_DI[row - 1][col - 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_x_DI[row - 1][col])) // 上中
-							{
-								mean_value = mean_value + deviation_x_DI[row - 1][col];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_x_DI[row - 1][col + 1])) // 上右
-							{
-								mean_value = mean_value + deviation_x_DI[row - 1][col + 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_x_DI[row][col - 1])) // 中左
-							{
-								mean_value = mean_value + deviation_x_DI[row][col - 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_x_DI[row][col + 1])) // 中右
-							{
-								mean_value = mean_value + deviation_x_DI[row][col + 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_x_DI[row + 1][col - 1])) // 下左
-							{
-								mean_value = mean_value + deviation_x_DI[row + 1][col - 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_x_DI[row + 1][col]))  // 下中
-							{
-								mean_value = mean_value + deviation_x_DI[row + 1][col];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_x_DI[row + 1][col + 1]))  // 下右
-							{
-								mean_value = mean_value + deviation_x_DI[row + 1][col + 1];
-								mean_counter++;
-							}
-
-							deviation_x_DI[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
-
-						}
-
-
-					}  // x方向结束
-
-
-
-					// 判断y方向
-					if (_isnan(deviation_y_DI[row][col]))
-					{
-
-						// 排列方式
-						//  x x x
-						//  x o x
-						//  x x x
-
-						if (_isnan(deviation_y_DI[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
-							_isnan(deviation_y_DI[row - 1][col]) &&
-							_isnan(deviation_y_DI[row - 1][col + 1]) &&
-							_isnan(deviation_y_DI[row][col - 1]) &&
-							_isnan(deviation_y_DI[row][col + 1]) &&
-							_isnan(deviation_y_DI[row + 1][col - 1]) &&
-							_isnan(deviation_y_DI[row + 1][col]) &&
-							_isnan(deviation_y_DI[row + 1][col + 1]))
-						{
-
-							deviation_y_DI[row][col] = 0;
-						} // 强制置零结束
-						else
-						{
-							// 排列方式
-							//  x x x
-							//  x o x
-							//  x x x
-
-							int mean_counter = 0;  // 有效值个数
-							float mean_value = 0;  // 有效值的和
-
-							if (!_isnan(deviation_y_DI[row - 1][col - 1]))  // 上左
-							{
-								mean_value = mean_value + deviation_y_DI[row - 1][col - 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_y_DI[row - 1][col])) // 上中
-							{
-								mean_value = mean_value + deviation_y_DI[row - 1][col];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_y_DI[row - 1][col + 1])) // 上右
-							{
-								mean_value = mean_value + deviation_y_DI[row - 1][col + 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_y_DI[row][col - 1])) // 中左
-							{
-								mean_value = mean_value + deviation_y_DI[row][col - 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_y_DI[row][col + 1])) // 中右
-							{
-								mean_value = mean_value + deviation_y_DI[row][col + 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_y_DI[row + 1][col - 1])) // 下左
-							{
-								mean_value = mean_value + deviation_y_DI[row + 1][col - 1];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_y_DI[row + 1][col]))  // 下中
-							{
-								mean_value = mean_value + deviation_y_DI[row + 1][col];
-								mean_counter++;
-							}
-							if (!_isnan(deviation_y_DI[row + 1][col + 1]))  // 下右
-							{
-								mean_value = mean_value + deviation_y_DI[row + 1][col + 1];
-								mean_counter++;
-							}
-
-							deviation_y_DI[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
-
-						}  // 对中心无效值插值结束
-
-					} // y方向结束
-
-				}
-			}  // 无效值遍历结束
-
-#pragma endregion 去除脱靶量中的无效值
-
-
 
 
 #pragma region 显示子孔径图像
 
-			if (subApertureImageSwitch->GetCheck() == 1)  // 显示WFS的实时图像
+			if (subApertureImageSwitch->GetCheck() == 1)
 			{
 
 				// 将图像刷入内存
 				WFS_GetSpotfieldImageCopy(instr.handle, imageBuf, row_image, col_image);
 				// 将图像由一维转为二维，下面的转换经过验证是正确的
 				for (int row = 0; row < 480; ++row)
-				{
 					for (int col = 0; col < 480; ++col)
 					{
 						image2DBuf[row][col] = imageBuf[480 * row + col];
 					}
-				}
-				//----------------------------------------------------------//
-				////## 监测通道
-				//(pW->m_Edit_Sta_Watch).Format(_T("%u"), sizeof(image2DBuf));
-				//pW->SetDlgItemTextW(IDC_EDIT_STA_WATCH, pW->m_Edit_Sta_Watch);
-				//----------------------------------------------------------//
-				// 之前使用cvCreateImage配合cvReleaseImage使用，总是内存泄露
-				// 现在cvCreateImageHeader与cvReleaseImageHeader成对使用，解决了内存泄露
+
 				m_img = cvCreateImageHeader(cvSize(480, 480), 8, 1);
 				cvSetData(m_img, image2DBuf, 480); // 这一句申请了内存，应该是通过cvReleaseImageHeader释放的
 
@@ -1809,7 +4609,7 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 					CMOSImageFlag = TRUE;
 
 			}
-			else  // 显示没有图像
+			else
 			{
 				if (CMOSImageFlag == TRUE)
 				{
@@ -1822,65 +4622,92 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 #pragma endregion 显示子孔径图像
 
 
-			// 直接积分法重建波前
-			WFS_CalcWavefront(instr.handle, 0, instr_setup.pupil_circular, *wavefront_DI);
+
+#pragma endregion 计算质心位置
+
+
+#pragma region 计算脱靶量
+
+			// 第二步：计算脱靶量
+			// 计算脱靶量
+			WFS_CalcSpotToReferenceDeviations(instr.handle, instr_setup.cancel_tilt);
+			// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
+			WFS_GetSpotDeviations(instr.handle, *deviation_x, *deviation_y);
+
+
+			// 记录重排前的数据
+// 			fp = fopen("D:\\externLib\\AOS\\Output\\DEBUG_ORIGIN_deviation_x.txt", "w");
+// 			if (!fp)
+// 			{
+// 				::MessageBox(NULL, _T("无法打开WFS_SpotCentroids_X文件 ！"), _T("写入状态"), MB_OK);
+// 				return -1;
+// 			}
+// 
+// 			for (int i = 0; i < 29; ++i)
+// 			{
+// 				for (int j = 0; j < 29; ++j)
+// 				{
+// 					fprintf(fp, "%f", deviation_x[i][j]);
+// 					fprintf(fp, "\t\t");
+// 				}
+// 				fputc('\n', fp);
+// 			}
+// 
+// 			fclose(fp);
 			
-			
-			//// 记录波前信息
-			//std::vector<std::vector<double>>  wavefront_DI_vector;
-			//wavefront_DI_vector.resize(29);
-			//for (int index = 0; index < 29;++index)
-			//{
-			//	wavefront_DI_vector[index].resize(29);
-			//}
-			//for (int row = 0; row < 29;++row)
-			//{
-			//	for (int col = 0; col < 29;++col)
-			//	{
-			//		wavefront_DI_vector[row][col] = wavefront_DI[row][col];
-			//	}
-			//}
 
-			//std::string fileFullPath, filenamePrefix, finenameSuffix;
-			//std::string statusCString;
-			//std::string recordwave;
 
-			//filenamePrefix = "D:\\externLib\\AOS\\Output\\";
-			//finenameSuffix = ".txt";
-
-			//IntToString(recordwave, recordwave_counter);
-			//++recordwave_counter;
-
-			//fileFullPath = filenamePrefix + "recordwave_" + recordwave + finenameSuffix;
-			//write_2d_File(fileFullPath, wavefront_DI_vector);
+#pragma endregion 计算脱靶量
 
 
 
+#pragma region 波前统计参数
 
-			// 根据直接积分法得到的波前计算波前统计参数
-			WFS_CalcWavefrontStatistics(instr.handle, &wavefront_min_ACEMETHOD, &wavefront_max_ACEMETHOD,
-				&wavefront_diff_ACEMETHOD, &wavefront_mean_ACEMETHOD, &wavefront_rms_ACEMETHOD, &wavefront_weighted_rms_ACEMETHOD);
-			pW->Show_PVRMS(wavefront_diff_ACEMETHOD, wavefront_rms_ACEMETHOD);
+			WFS_CalcWavefront(instr.handle, instr_setup.wavefront_type, instr_setup.pupil_circular, *wavefront);
+			WFS_CalcWavefrontStatistics(instr.handle, &wavefront_min, &wavefront_max,
+				&wavefront_diff, &wavefront_mean, &wavefront_rms, &wavefront_weighted_rms);
+
+			// 显示PV值
+			(pW->m_Edit_Sta_PV).Format(_T("%lf"), wavefront_diff);
+			pW->SetDlgItemTextW(IDC_EDIT_STA_PV, pW->m_Edit_Sta_PV);
+
+			// 显示RMS值
+			(pW->m_Edit_Sta_RMS).Format(_T("%lf"), wavefront_rms);
+			pW->SetDlgItemTextW(IDC_EDIT_STA_RMS, pW->m_Edit_Sta_RMS);
 
 
-			// 将测得的实时波前脱靶量重排为一维向量
-			for (int subapture_counter = 0; subapture_counter < eff_picked.size(); ++subapture_counter)
+#pragma endregion 波前统计参数
+
+
+
+#pragma region 重排矩阵
+
+			int subapture_counter = 0; // 每次循环计数器都要置零
+			// 按照与lsqA一致的有效点顺序压栈
+
+			for (int subapture_counter = 0; subapture_counter < 305; ++subapture_counter)
 			{
 
 				row_effsub = eff_picked[subapture_counter][0] - 1;
 				col_effsub = eff_picked[subapture_counter][1] - 1;
 				// 将脱靶量的单位从pixel转为nm，一个像素大小9.9um
-				lsqy[2 * subapture_counter] = deviation_x_DI[row_effsub][col_effsub];  // 先压入X方向
-				lsqy[2 * subapture_counter + 1] = deviation_y_DI[row_effsub][col_effsub];  // 再压入y方向
+				lsqy[2 * subapture_counter] = deviation_x[row_effsub][col_effsub];  // 先压入X方向
+				lsqy[2 * subapture_counter + 1] = deviation_y[row_effsub][col_effsub];  // 再压入y方向
 
-			}	
+			}
 			// 记录重排之后的数据
-			//write_1d_File("D:\\externLib\\AOS\\Output\\DEBUG_REARRANGE_deviation_x.txt", lsqy);
+// 			write_1d_File("D:\\externLib\\AOS\\Output\\DEBUG_REARRANGE_deviation_x.txt",lsqy);
 
 
-			// 计算各个驱动单元的执行量
-			std::vector <int>::size_type row_num;  // 行数
-			std::vector <int>::size_type col_num;  // 列数
+
+#pragma endregion 重排矩阵
+
+
+#pragma region 计算执行量
+
+			double sum_temp = 0;
+			std::vector <int>::size_type row_num;
+			std::vector <int>::size_type col_num;
 			row_num = lsqA.size();
 			col_num = lsqA[0].size();
 			for (int row = 0; row < row_num; row++)
@@ -1894,29 +4721,71 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 				zernikeMatrix_recon_array_ACEMETHOD[row] = sum_temp * impulse_stroke;  // 得到的单位是nm
 			}
 
-			// 驱动变形镜
+
+
+			// 记录执行量
+			fp = fopen("D:\\externLib\\AOS\\Output\\DEBUG_DM_Stroke.txt", "w");
+			if (!fp)
+			{
+				::MessageBox(NULL, _T("无法打开WFS_ZernikeCoeff文件 ！"), _T("Writing Status"), MB_OK);
+				return -1;
+			}
+
+			for (int i = 0; i < 140 + 1; ++i)
+			{
+				fprintf(fp, "%f", zernikeMatrix_recon_array_ACEMETHOD[i]);
+				fputc('\n', fp);
+			}
+			fclose(fp);
+
+
+
+#pragma endregion 计算执行量
+
+
+
+#pragma region 发给变形镜
+
+			//## 这里要有一个转换，将vector转换为数组
 			P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
 			aoSystemData->dDMDesired = zernikeMatrix_recon_array_ACEMETHOD;
 			int status = P_DM_SetSpatialFrame();
 
+#pragma endregion 发给变形镜
 
-			// 选择是否显示执行量(直接斜率法)
-			float temp;
-			if (showExecuDist->GetCheck() == 1)
+
+
+
+
+
+#pragma region 等待时间
+
+			//新计时器开始
+			LARGE_INTEGER nStartCounter_dmwait;
+			LARGE_INTEGER nFrequency_dmwait;
+			double nTime_dmwait = 0; // 记录时间
+
+			::QueryPerformanceCounter(&nStartCounter_dmwait);
+			::QueryPerformanceFrequency(&nFrequency_dmwait);
+
+
+			do
 			{
+				LARGE_INTEGER nStopCounter_dmwait;
+				::QueryPerformanceCounter(&nStopCounter_dmwait);
+				nTime_dmwait = 1000 * ((double)nStopCounter_dmwait.QuadPart - (double)nStartCounter_dmwait.QuadPart) / (double)nFrequency_dmwait.QuadPart;    // 单位 ms
+			} while (nTime_dmwait < 2000);
 
-				for (int k_index = 0; k_index < 144; ++k_index)
-				{
-					temp = zernikeMatrix_recon_array_ACEMETHOD[k_index];
-					(pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]).Format(_T("%lf"), temp);
-					pW->ptr_DeformMirrorDlg->SetDlgItemTextW(IDC_EDIT_DM_M001 + k_index, pW->ptr_DeformMirrorDlg->m_Edit_DM[k_index]);
 
-				}
-			}
+#pragma endregion 等待时间
 
-			wait4U(1500);  // 等待一定时间
+
 
 		}  // 闭环结束
+
+
+
+
 
 	} // if结束，直接斜率法结束
 
@@ -1935,547 +4804,13 @@ UINT ThreadFunc_WFS_Measurement_CONLOOP(LPVOID pParam)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// 预计算线程函数
-UINT ThreadFunc_PreCalculation(LPVOID pParam)
-{
 
-#pragma region 局部变量
 
-	CAOSys_v8Dlg* pW = (CAOSys_v8Dlg*)pParam;
 
-	// 动态保存文件需要的std::string变量
-	std::string fileFullPath, filenamePrefix, finenameSuffix;
-	std::string indexCString, XdeviCString, YdeviCString;
-	std::string statusCString;
-
-	XdeviCString = "XDevi";
-	YdeviCString = "YDevi";
-	filenamePrefix = "D:\\externLib\\AOS\\Output\\PreCalc\\in\\";
-	finenameSuffix = ".txt";
-
-	// 用于在状态栏显示
-	CString indexCString_forreal;
-
-
-	// 将144个DM驱动器单元依次发给变形镜，WFS获得响应的波前
-	double DM_PreCalc[144];  // 必须是double，否则aoSystemData->dDMDesired = DM_PreCalc;不好强转
-	float  deviation_x_PreCalc[40][50];  // x方向脱靶量，单位像素
-	float  deviation_y_PreCalc[40][50];  // y方向脱靶量，单位像素
-	std::vector<std::vector<double>> deviation_x_nm_PreCalc;  // x方向斜坡数据，单位nm
-	std::vector<std::vector<double>> deviation_y_nm_PreCalc;   // y方向斜坡数据，单位nm
-	// 为容器分配内存空间
-	deviation_x_nm_PreCalc.resize(29);
-	for (int index = 0; index < 29;++index)
-	{
-		deviation_x_nm_PreCalc[index].resize(29);
-	}
-	deviation_y_nm_PreCalc.resize(29);
-	for (int index = 0; index < 29; ++index)
-	{
-		deviation_y_nm_PreCalc[index].resize(29);
-	}
-
-
-	// 重建波前用到的变量
-	float   wavefront_Impulse[40][50];
-	std::vector<std::vector<double>> wavefront_Impulse_Vector; // 用于保存数据的容器
-	// 为容器分配内存空间
-	wavefront_Impulse_Vector.resize(29); // 分配行
-	for (int index = 0; index < 29; ++index)
-	{
-		wavefront_Impulse_Vector[index].resize(29);  // 分配列
-	}
-
-	// zernike重建需要的变量
-	ViInt32		zernike_order_Impulse = 4;
-	float		zernike_um_Impulse[16];  // 0为额外数据，1~15为zernike系数
-	float		zernike_orders_rms_um_Impulse[11];
-	double		roc_mm_Impulse;
-
-	// WFS像素大小4.65um，用于将单位从pixel转换为nm
-	float  unitCoeff = 1;
-
-
-	// zernike重建时要计算基底
-	zernike(0, 0, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_01, pupil, coordMoveX, coordMoveY);
-	zernike(1, -1, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_02, pupil, coordMoveX, coordMoveY);
-	zernike(1, 1, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_03, pupil, coordMoveX, coordMoveY);
-	zernike(2, -2, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_04, pupil, coordMoveX, coordMoveY);
-	zernike(2, 0, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_05, pupil, coordMoveX, coordMoveY);
-	zernike(2, 2, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_06, pupil, coordMoveX, coordMoveY);
-	zernike(3, -3, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_07, pupil, coordMoveX, coordMoveY);
-	zernike(3, -1, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_08, pupil, coordMoveX, coordMoveY);
-	zernike(3, 1, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_09, pupil, coordMoveX, coordMoveY);
-	zernike(3, 3, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_10, pupil, coordMoveX, coordMoveY);
-	zernike(4, -4, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_11, pupil, coordMoveX, coordMoveY);
-	zernike(4, -2, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_12, pupil, coordMoveX, coordMoveY);
-	zernike(4, 0, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_13, pupil, coordMoveX, coordMoveY);
-	zernike(4, 2, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_14, pupil, coordMoveX, coordMoveY);
-	zernike(4, 4, 29, instr_setup.pupil_dia_x_mm, zernikeMatrix_15, pupil, coordMoveX, coordMoveY);
-
-	// 用于直接斜率法预计算中将波前信息写入文件中
-	std::vector<std::vector<double>> zernikeMatrix_recon_ACEMETHOD_PreCalc;
-	zernikeMatrix_recon_ACEMETHOD_PreCalc.resize(29);  // 给变量重新分配内存空间
-	for (int index = 0; index < 29; ++index)
-	{
-		zernikeMatrix_recon_ACEMETHOD_PreCalc[index].resize(29);
-	}
-
-#pragma endregion 局部变量
-
-
-
-	for (int index = 0; index < 144; ++index)
-	{
-		// int类型转换为std::string类型，用于保存文件使用
-		IntToString(indexCString, index);
-
-
-		// 依次更改变形镜
-		for (int i = 0; i < 144; ++i)
-		{
-			DM_PreCalc[i] = bias_initial;
-		}
-		DM_PreCalc[index] = bias_initial + impulse_stroke;
-
-		// 驱动DM
-		P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
-		aoSystemData->dDMDesired = DM_PreCalc;
-		int status = P_DM_SetSpatialFrame();
-
-		// 普通模式获取质心位置
-		WFS_TakeSpotfieldImage(instr.handle);
-		// 计算质心位置
-		WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
-		// 计算脱靶量
-		WFS_CalcSpotToReferenceDeviations(instr.handle, instr_setup.cancel_tilt);
-		// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
-		WFS_GetSpotDeviations(instr.handle, *deviation_x_PreCalc, *deviation_y_PreCalc);
-
-
-#pragma region 去掉脱靶量中的无效值
-
-
-
-		// 脱靶量为29x29，边界采用置零
-
-		deviation_x_PreCalc[0][0] = 0; deviation_x_PreCalc[0][28] = 0; deviation_x_PreCalc[28][0] = 0; deviation_x_PreCalc[28][28] = 0;  // 四个角置零
-		deviation_y_PreCalc[0][0] = 0; deviation_y_PreCalc[0][28] = 0; deviation_y_PreCalc[28][0] = 0; deviation_y_PreCalc[28][28] = 0;  // 四个角置零
-
-		// 最外面四条边置零
-		for (int col = 1; col < 28; ++col)  // 第0行
-		{
-			deviation_x_PreCalc[0][col] = 0;
-			deviation_y_PreCalc[0][col] = 0;
-		}
-		for (int col = 1; col < 28; ++col)  // 第28行
-		{
-			deviation_x_PreCalc[28][col] = 0;
-			deviation_y_PreCalc[28][col] = 0;
-		}
-		for (int row = 1; row < 28; ++row)  // 第0列
-		{
-			deviation_x_PreCalc[row][0] = 0;
-			deviation_y_PreCalc[row][0] = 0;
-		}
-		for (int row = 1; row < 28; ++row)  // 第28列
-		{
-			deviation_x_PreCalc[row][28] = 0;
-			deviation_y_PreCalc[row][28] = 0;
-		}
-
-
-		// 对中间的数据进行平均插值
-		for (int row = 1; row < 28; ++row)  // 空出最上下两行
-		{
-			for (int col = 1; col < 28; ++col) // 空出最左右两列
-			{
-
-				// 判断x方向
-				if (_isnan(deviation_x_PreCalc[row][col]))
-				{
-					// 排列方式
-					//  x x x
-					//  x o x
-					//  x x x
-
-					if (_isnan(deviation_x_PreCalc[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
-						_isnan(deviation_x_PreCalc[row - 1][col]) &&
-						_isnan(deviation_x_PreCalc[row - 1][col + 1]) &&
-						_isnan(deviation_x_PreCalc[row][col - 1]) &&
-						_isnan(deviation_x_PreCalc[row][col + 1]) &&
-						_isnan(deviation_x_PreCalc[row + 1][col - 1]) &&
-						_isnan(deviation_x_PreCalc[row + 1][col]) &&
-						_isnan(deviation_x_PreCalc[row + 1][col + 1]))
-					{
-						deviation_x_PreCalc[row][col] = 0;
-					}
-					else
-					{
-						// 排列方式
-						//  x x x
-						//  x o x
-						//  x x x
-
-						int mean_counter = 0;  // 有效值个数
-						float mean_value = 0;  // 有效值的和
-
-						if (!_isnan(deviation_x_PreCalc[row - 1][col - 1]))  // 上左
-						{
-							mean_value = mean_value + deviation_x_PreCalc[row - 1][col - 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_x_PreCalc[row - 1][col])) // 上中
-						{
-							mean_value = mean_value + deviation_x_PreCalc[row - 1][col];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_x_PreCalc[row - 1][col + 1])) // 上右
-						{
-							mean_value = mean_value + deviation_x_PreCalc[row - 1][col + 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_x_PreCalc[row][col - 1])) // 中左
-						{
-							mean_value = mean_value + deviation_x_PreCalc[row][col - 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_x_PreCalc[row][col + 1])) // 中右
-						{
-							mean_value = mean_value + deviation_x_PreCalc[row][col + 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_x_PreCalc[row + 1][col - 1])) // 下左
-						{
-							mean_value = mean_value + deviation_x_PreCalc[row + 1][col - 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_x_PreCalc[row + 1][col]))  // 下中
-						{
-							mean_value = mean_value + deviation_x_PreCalc[row + 1][col];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_x_PreCalc[row + 1][col + 1]))  // 下右
-						{
-							mean_value = mean_value + deviation_x_PreCalc[row + 1][col + 1];
-							mean_counter++;
-						}
-
-						deviation_x_PreCalc[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
-
-					}
-
-
-				}  // x方向结束
-
-
-
-				// 判断y方向
-				if (_isnan(deviation_y_PreCalc[row][col]))
-				{
-
-					// 排列方式
-					//  x x x
-					//  x o x
-					//  x x x
-
-					if (_isnan(deviation_y_PreCalc[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
-						_isnan(deviation_y_PreCalc[row - 1][col]) &&
-						_isnan(deviation_y_PreCalc[row - 1][col + 1]) &&
-						_isnan(deviation_y_PreCalc[row][col - 1]) &&
-						_isnan(deviation_y_PreCalc[row][col + 1]) &&
-						_isnan(deviation_y_PreCalc[row + 1][col - 1]) &&
-						_isnan(deviation_y_PreCalc[row + 1][col]) &&
-						_isnan(deviation_y_PreCalc[row + 1][col + 1]))
-					{
-
-						deviation_y_PreCalc[row][col] = 0;
-					} // 强制置零结束
-					else
-					{
-						// 排列方式
-						//  x x x
-						//  x o x
-						//  x x x
-
-						int mean_counter = 0;  // 有效值个数
-						float mean_value = 0;  // 有效值的和
-
-						if (!_isnan(deviation_y_PreCalc[row - 1][col - 1]))  // 上左
-						{
-							mean_value = mean_value + deviation_y_PreCalc[row - 1][col - 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_y_PreCalc[row - 1][col])) // 上中
-						{
-							mean_value = mean_value + deviation_y_PreCalc[row - 1][col];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_y_PreCalc[row - 1][col + 1])) // 上右
-						{
-							mean_value = mean_value + deviation_y_PreCalc[row - 1][col + 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_y_PreCalc[row][col - 1])) // 中左
-						{
-							mean_value = mean_value + deviation_y_PreCalc[row][col - 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_y_PreCalc[row][col + 1])) // 中右
-						{
-							mean_value = mean_value + deviation_y_PreCalc[row][col + 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_y_PreCalc[row + 1][col - 1])) // 下左
-						{
-							mean_value = mean_value + deviation_y_PreCalc[row + 1][col - 1];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_y_PreCalc[row + 1][col]))  // 下中
-						{
-							mean_value = mean_value + deviation_y_PreCalc[row + 1][col];
-							mean_counter++;
-						}
-						if (!_isnan(deviation_y_PreCalc[row + 1][col + 1]))  // 下右
-						{
-							mean_value = mean_value + deviation_y_PreCalc[row + 1][col + 1];
-							mean_counter++;
-						}
-
-						deviation_y_PreCalc[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
-
-					}  // 对中心无效值插值结束
-
-				} // y方向结束
-
-			}
-		}  // 无效值遍历结束
-
-
-#pragma endregion 去掉脱靶量中的无效值
-
-
-		// 更换数据类型，可用于写入文件
-		for (int row = 0; row < 29; ++row)
-		{
-			for (int col = 0; col < 29; ++col)
-			{
-				deviation_x_nm_PreCalc[row][col] = deviation_x_PreCalc[row][col] * unitCoeff;
-				deviation_y_nm_PreCalc[row][col] = deviation_y_PreCalc[row][col] * unitCoeff;
-			}
-		}
-
-
-#pragma region 直接积分法重建Impulse波前
-
-		// 通过脱靶量，由直接积分法，获得重建波前
-		WFS_CalcWavefront(instr.handle, 0, 0, *wavefront_Impulse);
-
-
-#pragma region 去掉直接积分法重建波前的无效值
-
-		// 脱靶量为29x29，边界采用置零
-		wavefront_Impulse[0][0] = 0; wavefront_Impulse[0][28] = 0; wavefront_Impulse[28][0] = 0; wavefront_Impulse[28][28] = 0;  // 四个角置零
-
-		// 最外面四条边置零
-		for (int col = 1; col < 28; ++col)  // 第0行
-		{
-			wavefront_Impulse[0][col] = 0;
-		}
-		for (int col = 1; col < 28; ++col)  // 第28行
-		{
-			wavefront_Impulse[28][col] = 0;
-		}
-		for (int row = 1; row < 28; ++row)  // 第0列
-		{
-			wavefront_Impulse[row][0] = 0;
-		}
-		for (int row = 1; row < 28; ++row)  // 第28列
-		{
-			wavefront_Impulse[row][28] = 0;
-		}
-
-
-		// 对中间的数据进行平均插值
-		for (int row = 1; row < 28; ++row)  // 空出最上下两行
-		{
-			for (int col = 1; col < 28; ++col) // 空出最左右两列
-			{
-
-				if (_isnan(wavefront_Impulse[row][col]))
-				{
-					// 排列方式
-					//  x x x
-					//  x o x
-					//  x x x
-
-					if (_isnan(wavefront_Impulse[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
-						_isnan(wavefront_Impulse[row - 1][col]) &&
-						_isnan(wavefront_Impulse[row - 1][col + 1]) &&
-						_isnan(wavefront_Impulse[row][col - 1]) &&
-						_isnan(wavefront_Impulse[row][col + 1]) &&
-						_isnan(wavefront_Impulse[row + 1][col - 1]) &&
-						_isnan(wavefront_Impulse[row + 1][col]) &&
-						_isnan(wavefront_Impulse[row + 1][col + 1]))
-					{
-						wavefront_Impulse[row][col] = 0;
-					}
-					else
-					{
-						// 排列方式
-						//  x x x
-						//  x o x
-						//  x x x
-
-						int mean_counter = 0;  // 有效值个数
-						float mean_value = 0;  // 有效值的和
-
-						if (!_isnan(wavefront_Impulse[row - 1][col - 1]))  // 上左
-						{
-							mean_value = mean_value + wavefront_Impulse[row - 1][col - 1];
-							mean_counter++;
-						}
-						if (!_isnan(wavefront_Impulse[row - 1][col])) // 上中
-						{
-							mean_value = mean_value + wavefront_Impulse[row - 1][col];
-							mean_counter++;
-						}
-						if (!_isnan(wavefront_Impulse[row - 1][col + 1])) // 上右
-						{
-							mean_value = mean_value + wavefront_Impulse[row - 1][col + 1];
-							mean_counter++;
-						}
-						if (!_isnan(wavefront_Impulse[row][col - 1])) // 中左
-						{
-							mean_value = mean_value + wavefront_Impulse[row][col - 1];
-							mean_counter++;
-						}
-						if (!_isnan(wavefront_Impulse[row][col + 1])) // 中右
-						{
-							mean_value = mean_value + wavefront_Impulse[row][col + 1];
-							mean_counter++;
-						}
-						if (!_isnan(wavefront_Impulse[row + 1][col - 1])) // 下左
-						{
-							mean_value = mean_value + wavefront_Impulse[row + 1][col - 1];
-							mean_counter++;
-						}
-						if (!_isnan(wavefront_Impulse[row + 1][col]))  // 下中
-						{
-							mean_value = mean_value + wavefront_Impulse[row + 1][col];
-							mean_counter++;
-						}
-						if (!_isnan(wavefront_Impulse[row + 1][col + 1]))  // 下右
-						{
-							mean_value = mean_value + wavefront_Impulse[row + 1][col + 1];
-							mean_counter++;
-						}
-
-						wavefront_Impulse[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
-
-					}
-
-
-				}
-
-			}
-		}  // 无效值遍历结束
-
-#pragma endregion 去掉直接积分法重建波前的无效值
-
-
-		// 将数组赋值给容器
-		for (int row = 0; row < 29;++row)
-		{
-			for (int col = 0; col < 29;++col)
-			{
-
-				wavefront_Impulse_Vector[row][col] = wavefront_Impulse[row][col];
-
-			}
-		}
-		fileFullPath = filenamePrefix + "ImpulseWavefrontDirect" + "_" + indexCString + finenameSuffix;
-		write_2d_File(fileFullPath, wavefront_Impulse_Vector);  // 记录直接积分法重建的波前
-
-#pragma endregion 直接积分法重建Impulse波前
-
-
-#pragma region zernike拟合法重建Impulse波前
-
-		// 通过脱靶量，由Zernike拟合法，获得重建波前
-		WFS_ZernikeLsf(instr.handle, &zernike_order_Impulse, zernike_um_Impulse, zernike_orders_rms_um_Impulse, &roc_mm_Impulse);
-
-		// 根据zernike系数重建波前
-		for (int row = 0; row < 29; ++row)
-		{
-			for (int col = 0; col < 29; ++col)
-			{
-				zernikeMatrix_recon_ACEMETHOD_PreCalc[row][col] =
-					zernike_um_Impulse[1] * zernikeMatrix_01[row][col] +
-					zernike_um_Impulse[2] * zernikeMatrix_02[row][col] +
-					zernike_um_Impulse[3] * zernikeMatrix_03[row][col] +
-					zernike_um_Impulse[4] * zernikeMatrix_04[row][col] +
-					zernike_um_Impulse[5] * zernikeMatrix_05[row][col] +
-					zernike_um_Impulse[6] * zernikeMatrix_06[row][col] +
-					zernike_um_Impulse[7] * zernikeMatrix_07[row][col] +
-					zernike_um_Impulse[8] * zernikeMatrix_08[row][col] +
-					zernike_um_Impulse[9] * zernikeMatrix_09[row][col] +
-					zernike_um_Impulse[10] * zernikeMatrix_10[row][col] +
-					zernike_um_Impulse[11] * zernikeMatrix_11[row][col] +
-					zernike_um_Impulse[12] * zernikeMatrix_12[row][col] +
-					zernike_um_Impulse[13] * zernikeMatrix_13[row][col] +
-					zernike_um_Impulse[14] * zernikeMatrix_14[row][col] +
-					zernike_um_Impulse[15] * zernikeMatrix_15[row][col];
-			}
-
-		}
-
-		fileFullPath = filenamePrefix + "ImpulseWavefrontZernike" + "_" + indexCString + finenameSuffix;
-		write_2d_File(fileFullPath, zernikeMatrix_recon_ACEMETHOD_PreCalc);  // 记录zernike拟合法重建的波前
-
-
-#pragma endregion zernike拟合法重建Impulse波前
-
-
-		wait4U(300); // 延迟300ms
-
-
-		// 将x脱靶量写入文件
-		fileFullPath = filenamePrefix + XdeviCString + "_" + indexCString + finenameSuffix;
-		write_2d_File(fileFullPath, deviation_x_nm_PreCalc);
-		// 将y脱靶量写入文件
-		fileFullPath = filenamePrefix + YdeviCString + "_" + indexCString + finenameSuffix;
-		write_2d_File(fileFullPath, deviation_y_nm_PreCalc);
-
-
-		indexCString_forreal.Format(_T("%d"), index);
-		str_showerror = _T("预处理数据：  ") + indexCString_forreal;
-		pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
-
-	}  // 遍历完毕所有变形镜单元的脉冲函数
-
-
-	str_showerror = _T("预处理完毕");
-	pW->SetDlgItemText(IDC_STATIC_SHOW_ERROR, str_showerror);
-
-
-	return 0;
-
-}  // 预处理线程函数结束
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-
-#pragma region
-
-// C风格的方式记录矩阵和向量
-
-// 将质心位置写入文件
+#pragma region //## C风格的函数逐渐废弃不用，逐渐采用C++风格的函数（11个函数）
+// 将当前计算的SPOT中心位置写入文件
 int WFS_WriteSpotCentroids()
 {
-	FILE  *fp;
-
 	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_SpotCentroids_X.txt", "w");
 	if (!fp)
 	{
@@ -2518,12 +4853,100 @@ int WFS_WriteSpotCentroids()
 }
 
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+int WFS_WriteSpotDeviations()
+{
+	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_SpotDeviations_X.txt", "w");
+	if (!fp)
+	{
+		::MessageBox(NULL, _T("无法打开WFS_SpotDeviations_X文件 ！"), _T("写入状态"), MB_OK);
+		return -1;
+	}
+
+	for (int i = 0; i < 29; ++i)
+	{
+		for (int j = 0; j < 29; ++j)
+		{
+			fprintf(fp, "%f", deviation_x[i][j]);
+			fprintf(fp, "\t\t");
+		}
+		fputc('\n', fp);
+	}
+
+	fclose(fp);
 
 
+	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_SpotDeviations_Y.txt", "w");
+	if (!fp)
+	{
+		::MessageBox(NULL, _T("无法打开WFS_SpotDeviations_Y文件 ！"), _T("写入状态"), MB_OK);
+		return -1;
+	}
+	for (int i = 0; i < 29; ++i)
+	{
+		for (int j = 0; j < 29; ++j)
+		{
+			fprintf(fp, "%f", deviation_y[i][j]);
+			fprintf(fp, "\t\t");
+		}
+		fputc('\n', fp);
+	}
+
+	fclose(fp);
+
+	return 0;
+
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+int WFS_WriteZernikeLsf()
+{
+	// 将Zernike系数写入文件
+	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_ZernikeCoeff.txt", "w");
+	if (!fp)
+	{
+		::MessageBox(NULL, _T("无法打开WFS_ZernikeCoeff文件 ！"), _T("Writing Status"), MB_OK);
+		return -1;
+	}
+
+	for (int i = 0; i < MAX_ZERNIKE_MODES + 1; ++i)
+	{
+		fprintf(fp, "%f", zernike_um[i]);
+		fputc('\n', fp);
+	}
+	fclose(fp);
+
+	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_Zernike_RMS_ROC.txt", "w");
+	if (!fp)
+	{
+		::MessageBox(NULL, _T("无法打开WFS_Zernike_RMS_ROC文件 ！"), _T("写入状态"), MB_OK);
+		return -1;
+	}
+
+	fprintf(fp, "zernike_orders_rms_um：\n");
+
+	for (int i = 0; i < MAX_ZERNIKE_ORDERS + 1; ++i)
+	{
+		fprintf(fp, "%f", zernike_orders_rms_um[i]);
+		fputc('\n', fp);
+	}
+
+
+	fprintf(fp, "\n");
+	fprintf(fp, "roc_mm： %lf", roc_mm);
+
+
+	fclose(fp);
+
+	return 0;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// 将当前zernike多项式得到的spot deviations拟合信息写入文件
 int WFS_WriteCalcReconstrDeviations()
 {
-	FILE  *fp;
-
 	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_CalcReconstrDeviations.txt", "w");
 	if (!fp)
 	{
@@ -2540,12 +4963,60 @@ int WFS_WriteCalcReconstrDeviations()
 }
 
 
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// 将spot deviations得到的波前信息写入文件
+int WFS_WriteCalcWavefront()
+{
+	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_CalcWavefront.txt", "w");
+	if (!fp)
+	{
+		::MessageBox(NULL, _T("无法打开WFS_CalcWavefront文件 ！"), _T("写入状态"), MB_OK);
+	}
+
+	for (int i = 0; i < 29; ++i)
+	{
+		for (int j = 0; j < 29; ++j)
+		{
+			fprintf(fp, "%f", wavefront[i][j]);
+			fprintf(fp, "\t\t");
+		}
+		fputc('\n', fp);
+	}
+
+	fclose(fp);
+
+	return 0;
+}
+
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// 将波前的统计信息写入文件
+int WFS_WriteCalcWavefrontStatistics()
+{
+	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_CalcWavefrontStatistics.txt", "w");
+	if (!fp)
+	{
+		::MessageBox(NULL, _T("无法打开WFS_CalcWavefrontStatistics文件 ！"), _T("写入状态"), MB_OK);
+		return -1;
+	}
+
+	fprintf(fp, "wavefront_min：  %lf \n", wavefront_min);
+	fprintf(fp, "wavefront_max： %lf \n", wavefront_max);
+	fprintf(fp, "wavefront_diff： %lf \n", wavefront_diff);
+	fprintf(fp, "wavefront_mean： %lf \n", wavefront_mean);
+	fprintf(fp, "wavefront_rms： %lf \n", wavefront_rms);
+	fprintf(fp, "wavefront_weighted_rms： %lf \n", wavefront_weighted_rms);
+
+
+	fclose(fp);
+
+	return 0;
+}
+
 
 // 将当前的Zernike矩阵写入文件
 int WFS_WriteZernikeMatrix()
 {
-	FILE  *fp;
-
 	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_WriteZernikeMatrix.txt", "w");
 	if (!fp)
 	{
@@ -2573,8 +5044,6 @@ int WFS_WriteZernikeMatrix()
 // 将wavefront与zerWave_Matrix29矩阵的减法结果写入文件
 int WFS_WriteWavefrontZernikeError()
 {
-	FILE  *fp;
-
 	fp = fopen("D:\\externLib\\AOS\\Output\\WFS_WavefrontZernikeError.txt", "w");
 	if (!fp)
 	{
@@ -2603,8 +5072,6 @@ int WFS_WriteWavefrontZernikeError()
 // 用于静态校正波前时，校验matlab计算的zernike拟合矩阵
 int DM_WriteCheckZernikeMatrix()
 {
-	FILE  *fp;
-
 	fp = fopen("D:\\externLib\\AOS\\conDM\\DM_CheckZernikeMatrix.txt", "w");
 	if (!fp)
 	{
@@ -2632,8 +5099,6 @@ int DM_WriteCheckZernikeMatrix()
 // 用于将操作后的矩阵写入文件
 int DM_WriteTransposeMatrix()
 {
-	FILE  *fp;
-
 	fp = fopen("D:\\externLib\\AOS\\conDM\\DM_TransposeZernikeMatrix.txt", "w");
 	if (!fp)
 	{
@@ -2661,8 +5126,6 @@ int DM_WriteTransposeMatrix()
 // 用于将一维的数组写入文件，即写入变形镜的一维数组
 int DM_Write1DMatrix()
 {
-	FILE  *fp;
-
 	fp = fopen("D:\\externLib\\AOS\\Output\\DM_1DArray.txt", "w");
 	if (!fp)
 	{
@@ -2672,24 +5135,21 @@ int DM_Write1DMatrix()
 
 	for (int i = 0; i < MAX_ZERNIKE_MODES + 1; ++i)
 	{
-		fprintf(fp, "%f", DM_Stroke_1D[i]);  // 144个元素
+		fprintf(fp, "%f", DM_Stroke_1D[i]);
 		fputc('\n', fp);
 	}
 	fclose(fp);
 
 
-	return 0;
 }
 
-#pragma endregion 
+#pragma endregion //## C风格的函数逐渐废弃不用，逐渐采用C++风格的函数
 
 
 
 
-#pragma region mapping   
-
-// 这里分为普通版本和vector版本
-
+#pragma region mapping   // 这段代码要简化
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 矩阵转置
 int MatrixTranspose(int gridIndex, float** matrixOut, float** matrixIn)
 {
@@ -2709,6 +5169,8 @@ int MatrixTranspose(int gridIndex, float** matrixOut, float** matrixIn)
 	return 0;
 }
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 矩阵左右翻转
 int MatrixFlipLeftRight(int gridIndex, float** matrixOut, float** matrixIn)
 {
@@ -2728,6 +5190,8 @@ int MatrixFlipLeftRight(int gridIndex, float** matrixOut, float** matrixIn)
 	return 0;
 }
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 矩阵上下翻转
 int MatrixFlipUpDown(int gridIndex, float** matrixOut, float** matrixIn)
 {
@@ -2747,6 +5211,8 @@ int MatrixFlipUpDown(int gridIndex, float** matrixOut, float** matrixIn)
 	return 0;
 }
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 矩阵顺时针旋转90度=上下翻转后转置
 int MatrixRotate90(int gridIndex, float** matrixOut, float** matrixIn)
 {
@@ -2766,6 +5232,8 @@ int MatrixRotate90(int gridIndex, float** matrixOut, float** matrixIn)
 	return 0;
 }
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 矩阵顺时针旋转180度=左右翻转后上下翻转
 int MatrixRotate180(int gridIndex, float** matrixOut, float** matrixIn)
 {
@@ -2785,6 +5253,8 @@ int MatrixRotate180(int gridIndex, float** matrixOut, float** matrixIn)
 	return 0;
 }
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // 矩阵顺时针旋转270度=作于翻转后再转置
 int MatrixRotate270(int gridIndex, float** matrixOut, float** matrixIn)
 {
@@ -2814,7 +5284,6 @@ int MatrixRotate90_vector(std::vector<std::vector<double>>& matrixOut, std::vect
 	return 0;
 
 }
-
 int MatrixRotate180_vector(std::vector<std::vector<double>>& matrixOut, std::vector<std::vector<double>>& matrixIn)
 {
 	for (int i = 0; i < 12; ++i)
@@ -2852,6 +5321,7 @@ int MatrixFlipUpDown_vector(std::vector<std::vector<double>>& matrixOut, std::ve
 	return 0;
 }
 
+
 int MatrixFlipLeftRight_vector(std::vector<std::vector<double>>& matrixOut, std::vector<std::vector<double>>& matrixIn)
 {
 	// 左右翻转
@@ -2871,7 +5341,6 @@ int MatrixFlipLeftRight_vector(std::vector<std::vector<double>>& matrixOut, std:
 // 以下是新版的写入文件的函数，主要特征是使用了std::vector容器，希望能够逐步代替之前的C风格的全局函数
 
 // 写入一维数据
-// 适用于所有算法
 int write_1d_File(const std::string& filename, std::vector<double>& array_1d)
 {
 	std::ofstream file;
@@ -2894,15 +5363,14 @@ int write_1d_File(const std::string& filename, std::vector<double>& array_1d)
 }
 
 
-// 写入二维数据
-// 适用于所有算法
+// 写入二维数据，第一次能够成功索引二维vector，挺不容易的！
 int write_2d_File(const std::string& filename, std::vector<std::vector<double>>& array_2d)
 {
 	std::ofstream file;
 	file.open(filename, std::ios_base::out);
 
-	std::vector<std::vector<double>>::iterator iter_row;	
-	std::vector<double>::iterator iter_col;			
+	std::vector<std::vector<double>>::iterator iter_row;		// 定义row方向的迭代器
+	std::vector<double>::iterator iter_col;				// 定义col方向的迭代器
 
 
 	if (!file)
@@ -2924,7 +5392,8 @@ int write_2d_File(const std::string& filename, std::vector<std::vector<double>>&
 }
 
 
-// 适用于所有算法
+
+// 使用流的概念读取文件中的矩阵
 MyMat_double inputMatrix(const std::string& filename)
 {
 	// 要打开的文件
@@ -2956,7 +5425,6 @@ MyMat_double inputMatrix(const std::string& filename)
 }
 
 
-// 适用于所有算法
 int init_2dVector(std::vector<std::vector<double>>&vectordata, const int row, const int col)
 {
 	std::vector<double> initVector(col, 0);
@@ -2968,7 +5436,6 @@ int init_2dVector(std::vector<std::vector<double>>&vectordata, const int row, co
 }
 
 // 重载版本
-// 适用于所有算法
 int init_2dVector(std::vector<std::vector<int>>&vectordata, const int row, const int col)
 {
 	std::vector<int> initVector(col, 0);
@@ -2980,7 +5447,6 @@ int init_2dVector(std::vector<std::vector<int>>&vectordata, const int row, const
 }
 
 // 释放二维vector数据
-// 适用于所有算法
 int release_2dVector(std::vector<std::vector<double>>&vectordata, const int row)
 {
 	for (int i = 0; i < row; ++i)
@@ -2990,7 +5456,6 @@ int release_2dVector(std::vector<std::vector<double>>&vectordata, const int row)
 }
 
 // 重载版本
-// 适用于所有算法
 int release_2dVector(std::vector<std::vector<int>>&vectordata, const int row)
 {
 	for (int i = 0; i < row; ++i)
@@ -3000,7 +5465,6 @@ int release_2dVector(std::vector<std::vector<int>>&vectordata, const int row)
 }
 
 // 一维vector初始化
-// 适用于所有算法
 int init_1dVector(std::vector<double>&vectordata, const int row)
 {
 	for (int i = 0; i < row; ++i)
@@ -3011,7 +5475,6 @@ int init_1dVector(std::vector<double>&vectordata, const int row)
 }
 
 // 释放一维vector数据
-// 适用于所有算法
 int release_1dVector(std::vector<double>&vectordata, const int row)
 {
 	for (int i = 0; i < row; ++i)
@@ -3022,435 +5485,14 @@ int release_1dVector(std::vector<double>&vectordata, const int row)
 }
 
 
-
-
-// 用于等待一定时间的函数，输入时间单位ms
-// 适用于所有算法
-int wait4U(int time_milliseconds) 
-{
-
-	//新计时器开始
-	LARGE_INTEGER nStartCounter_dmwait;
-	LARGE_INTEGER nFrequency_dmwait;
-	double nTime_dmwait = 0; // 记录时间
-
-	::QueryPerformanceCounter(&nStartCounter_dmwait);
-	::QueryPerformanceFrequency(&nFrequency_dmwait);
-
-
-	do
-	{
-		LARGE_INTEGER nStopCounter_dmwait;
-		::QueryPerformanceCounter(&nStopCounter_dmwait);
-		nTime_dmwait = 1000 * ((double)nStopCounter_dmwait.QuadPart - (double)nStartCounter_dmwait.QuadPart) / (double)nFrequency_dmwait.QuadPart;    // 单位 ms
-	} while (nTime_dmwait < time_milliseconds);
-
-
-	return 0;  // 成功返回0
-}
-
-
-
-// 用于驱动变形镜的函数，单位是nm
-// 适用于所有算法
-int DriveDeformMirror_nm(double(&executeStroke)[140])
-{
-
-	// 将执行量发送给变形镜，驱动其运动
-	P_DM_SetQuadraticCoeffAndMaxV(coeff, 200);
-	aoSystemData->dDMDesired = executeStroke;
-	P_DM_SetSpatialFrame();   // 按照nm单位驱动变形镜，但是这个驱动行程的分辨率是多少？
-
-
-	return 0;  // 成功返回0
-
-}
-
-
-// 用于探测波前的脱靶量(仅适用于普通模式)
-// 适用于所有算法
-int Detect_Wavefront2Deviation_Normal()
-{
-
-	// 普通模式获取质心位置
-	WFS_TakeSpotfieldImage(instr.handle);
-
-	// 计算质心位置
-	WFS_CalcSpotsCentrDiaIntens(instr.handle, OPTION_DYN_NOISE_CUT, 0);
-
-	// 计算脱靶量
-	WFS_CalcSpotToReferenceDeviations(instr.handle, instr_setup.cancel_tilt);
-
-	// 获取脱靶量，用于下面转换为斜坡数据，这里需要进行单位转换，WFS_GetSpotDeviations得到的单位是pixels
-	WFS_GetSpotDeviations(instr.handle, *deviation_x, *deviation_y);
-
-
-	return 0;
-
-}
-
-// 用于直接处理脱靶量，保证处理后的数据没有无效值，适用于普通模式与高速模式，输入可能包含无效值的脱靶量，输出全部有效的脱靶量
-// 用于所有算法
-int MeanInterpolation_KillNAN()
-{
-
-	// 脱靶量为29x29，边界采用置零
-
-	deviation_x[0][0] = 0; deviation_x[0][28] = 0; deviation_x[28][0] = 0; deviation_x[28][28] = 0;  // 四个角置零
-	deviation_y[0][0] = 0; deviation_y[0][28] = 0; deviation_y[28][0] = 0; deviation_y[28][28] = 0;  // 四个角置零
-
-	// 最外面四条边置零
-	for (int col = 1; col < 28; ++col)  // 第0行
-	{
-		deviation_x[0][col] = 0;
-		deviation_y[0][col] = 0;
-	}
-	for (int col = 1; col < 28; ++col)  // 第28行
-	{
-		deviation_x[28][col] = 0;
-		deviation_y[28][col] = 0;
-	}
-	for (int row = 1; row < 28; ++row)  // 第0列
-	{
-		deviation_x[row][0] = 0;
-		deviation_y[row][0] = 0;
-	}
-	for (int row = 1; row < 28; ++row)  // 第28列
-	{
-		deviation_x[row][28] = 0;
-		deviation_y[row][28] = 0;
-	}
-
-
-	// 对中间的数据进行平均插值
-	for (int row = 1; row < 28; ++row)  // 空出最上下两行
-	{
-		for (int col = 1; col < 28; ++col) // 空出最左右两列
-		{
-
-			// 判断x方向
-			if (_isnan(deviation_x[row][col]))
-			{
-				// 排列方式
-				//  x x x
-				//  x o x
-				//  x x x
-
-				if (_isnan(deviation_x[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
-					_isnan(deviation_x[row - 1][col]) &&
-					_isnan(deviation_x[row - 1][col + 1]) &&
-					_isnan(deviation_x[row][col - 1]) &&
-					_isnan(deviation_x[row][col + 1]) &&
-					_isnan(deviation_x[row + 1][col - 1]) &&
-					_isnan(deviation_x[row + 1][col]) &&
-					_isnan(deviation_x[row + 1][col + 1]))
-				{
-					deviation_x[row][col] = 0;
-				}
-				else
-				{
-					// 排列方式
-					//  x x x
-					//  x o x
-					//  x x x
-
-					int mean_counter = 0;  // 有效值个数
-					float mean_value = 0;  // 有效值的和
-
-					if (!_isnan(deviation_x[row - 1][col - 1]))  // 上左
-					{
-						mean_value = mean_value + deviation_x[row - 1][col - 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_x[row - 1][col])) // 上中
-					{
-						mean_value = mean_value + deviation_x[row - 1][col];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_x[row - 1][col + 1])) // 上右
-					{
-						mean_value = mean_value + deviation_x[row - 1][col + 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_x[row][col - 1])) // 中左
-					{
-						mean_value = mean_value + deviation_x[row][col - 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_x[row][col + 1])) // 中右
-					{
-						mean_value = mean_value + deviation_x[row][col + 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_x[row + 1][col - 1])) // 下左
-					{
-						mean_value = mean_value + deviation_x[row + 1][col - 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_x[row + 1][col]))  // 下中
-					{
-						mean_value = mean_value + deviation_x[row + 1][col];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_x[row + 1][col + 1]))  // 下右
-					{
-						mean_value = mean_value + deviation_x[row + 1][col + 1];
-						mean_counter++;
-					}
-
-					deviation_x[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
-
-				}
-
-
-			}  // x方向结束
-
-
-
-			// 判断y方向
-			if (_isnan(deviation_y[row][col]))
-			{
-
-				// 排列方式
-				//  x x x
-				//  x o x
-				//  x x x
-
-				if (_isnan(deviation_y[row - 1][col - 1]) &&   // 如果无效点周围8各点都是无效值，那么此点脱靶量置零
-					_isnan(deviation_y[row - 1][col]) &&
-					_isnan(deviation_y[row - 1][col + 1]) &&
-					_isnan(deviation_y[row][col - 1]) &&
-					_isnan(deviation_y[row][col + 1]) &&
-					_isnan(deviation_y[row + 1][col - 1]) &&
-					_isnan(deviation_y[row + 1][col]) &&
-					_isnan(deviation_y[row + 1][col + 1]))
-				{
-
-					deviation_y[row][col] = 0;
-				} // 强制置零结束
-				else
-				{
-					// 排列方式
-					//  x x x
-					//  x o x
-					//  x x x
-
-					int mean_counter = 0;  // 有效值个数
-					float mean_value = 0;  // 有效值的和
-
-					if (!_isnan(deviation_y[row - 1][col - 1]))  // 上左
-					{
-						mean_value = mean_value + deviation_y[row - 1][col - 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_y[row - 1][col])) // 上中
-					{
-						mean_value = mean_value + deviation_y[row - 1][col];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_y[row - 1][col + 1])) // 上右
-					{
-						mean_value = mean_value + deviation_y[row - 1][col + 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_y[row][col - 1])) // 中左
-					{
-						mean_value = mean_value + deviation_y[row][col - 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_y[row][col + 1])) // 中右
-					{
-						mean_value = mean_value + deviation_y[row][col + 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_y[row + 1][col - 1])) // 下左
-					{
-						mean_value = mean_value + deviation_y[row + 1][col - 1];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_y[row + 1][col]))  // 下中
-					{
-						mean_value = mean_value + deviation_y[row + 1][col];
-						mean_counter++;
-					}
-					if (!_isnan(deviation_y[row + 1][col + 1]))  // 下右
-					{
-						mean_value = mean_value + deviation_y[row + 1][col + 1];
-						mean_counter++;
-					}
-
-					deviation_y[row][col] = mean_value / mean_counter;  // 利用无效值周围的有效值的平均值给无效值赋值
-
-				}  // 对中心无效值插值结束
-
-			} // y方向结束
-
-		}
-	}  // 无效值遍历结束
-
-	return 0;
-}
-
-
-// 计算并返回评价函数，评价函数的计算方式是：x与y方向的脱靶量平方相加，最后开根号得到
-// 仅在梯度算法中使用
-double CalcMeritFunc_SquareDevi()
-{
-
-	double meritTemp = 0;
-	for (int row = 0; row < 29; ++row)
-	{
-		for (int col = 0; col < 29; ++col)
-		{
-
-			meritTemp = meritTemp + pow(deviation_x[row][col], 2) + pow(deviation_y[row][col], 2);
-
-		}
-	}
-	return sqrt(meritTemp);
-
-}
-
-
-
-
 #pragma endregion 全局函数
 
 
 
-//----------------------------------------------------    ----------------------------------------------------//
+//----------------------------------------------------  分割线  ----------------------------------------------------//
 
 
 
 
 
 
-#pragma region 封装为成员函数
-
-// 封装为类的成员函数，显示PV值与RMS以及评价函数
-// 仅在梯度算法中使用
-int CAOSys_v8Dlg::Show_MeritPVRMS(double merit, double PV, double RMS)
-{
-
-	// 显示评价函数值
-	m_Edit_ShowMerit.Format(_T("%lf"), merit);
-	SetDlgItemTextW(IDC_EDIT_SHOWMERIT, m_Edit_ShowMerit);
-
-	// 显示PV
-	m_Edit_Sta_PV.Format(_T("%lf"), PV);
-	SetDlgItemTextW(IDC_EDIT_STA_PV, m_Edit_Sta_PV);
-
-	// 显示RMS
-	m_Edit_Sta_RMS.Format(_T("%lf"), RMS);
-	SetDlgItemTextW(IDC_EDIT_STA_RMS, m_Edit_Sta_RMS);
-
-
-	return 0;
-}
-
-
-// 定时器，起到延时作用
-// 可以用于所有算法
-int CAOSys_v8Dlg::Timer_SetTimer(double settimer)
-{
-
-	//-----------------------------------------------------
-	//计时器开始
-	LARGE_INTEGER nStartCounter_wait;
-	LARGE_INTEGER nFrequency_wait;
-	double nTime_wait = 0; // 记录时间
-	::QueryPerformanceCounter(&nStartCounter_wait);
-	::QueryPerformanceFrequency(&nFrequency_wait);
-	//-----------------------------------------------------
-
-	if (ptr_MiscSettingDlg->m_Check_SubDlg_TimeSetter.GetCheck() == 1)  // 选择是否进行计时
-	{
-
-		do
-		{
-
-			//-----------------------------------------------------
-			// 计时器结束
-			LARGE_INTEGER nStopCounter_wait;
-			::QueryPerformanceCounter(&nStopCounter_wait);
-			nTime_wait = 1000 * ((double)nStopCounter_wait.QuadPart - (double)nStartCounter_wait.QuadPart) / (double)nFrequency_wait.QuadPart;    // 单位 ms
-			//显示计时器
-			m_Edit_Show_NewTimer.Format(_T("%lf"), nTime_wait);
-			SetDlgItemText(IDC_EDIT_SHOW_NEWTIMER, m_Edit_Show_NewTimer);
-			//-----------------------------------------------------
-
-
-		} while (nTime_wait < settimer);
-
-
-	}
-	else
-	{
-		// 没有定时，不执行
-	}
-
-
-	return 0;
-}
-
-
-
-// 用于旋转12x12网格的矩阵
-// 适用于所有算法
-int CAOSys_v8Dlg::rotateMatrix_12vector(int angle, std::vector<std::vector<double>>& origin, std::vector<std::vector<double>>& modified)
-{
-
-	// 矩阵旋转功能
-	if (90 == angle)  // 顺时针旋转90度，下面都是顺时针
-	{
-		MatrixRotate90_vector(modified, origin);
-	}
-	else if (180 == angle)
-	{
-		MatrixRotate180_vector(modified, origin);
-	}
-	else if (270 == angle)
-	{
-		MatrixRotate270_vector(modified, origin);
-	}
-	else if (1 == angle)   // 上下翻转
-	{
-		MatrixFlipUpDown_vector(modified, origin);
-	}
-	else if (2 == angle) // 左右翻转
-	{
-		MatrixFlipLeftRight_vector(modified, origin);
-	}
-	else if (3 == angle)  // 上下翻转后左右翻转
-	{
-		MatrixFlipUpDown_vector(modified, origin);
-		MatrixFlipLeftRight_vector(modified, origin);
-	}
-	else
-	{
-		// 默认
-		MatrixRotate0_vector(modified, origin);
-	}
-
-
-	return 0;
-}
-
-
-
-
-int CAOSys_v8Dlg::Show_PVRMS(double PV, double RMS)
-{
-	// 显示PV
-	m_Edit_Sta_PV.Format(_T("%lf"), PV);
-	SetDlgItemTextW(IDC_EDIT_STA_PV, m_Edit_Sta_PV);
-
-	// 显示RMS
-	m_Edit_Sta_RMS.Format(_T("%lf"), RMS);
-	SetDlgItemTextW(IDC_EDIT_STA_RMS, m_Edit_Sta_RMS);
-
-	return 0;
-}
-
-
-#pragma endregion 封装为成员函数
